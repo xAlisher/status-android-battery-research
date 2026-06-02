@@ -21,7 +21,7 @@
 
 ## Abstract
 
-Status Android was flagged by Android OS for high battery and CPU usage after an 8-hour overnight background soak on mobile data (96% → 31%, 65% consumed). The app was in WakuV2 Light mode with no active user interaction. Static source code analysis of the target build (`4cf3d8e4b`) identified **five single-factor hypotheses** and **five compound multi-factor hypotheses** that plausibly explain the drain. The most critical findings are: (1) a 50ms keyboard polling timer in the Qt C++ layer that fires 20 times/second with no background guard; (2) the Qt event loop is not paused on Android `onPause()`, meaning the keyboard timer and all other QML timers continue running indefinitely while the app is backgrounded; (3) a new `NetworkConnectivityCallback` in the `:statusgo` process (added in this build) that fires on every network capability change and triggers a `ConnectionChange` RPC with no background throttling. These factors compound: the worst-case scenario — mobile data, multiple wallet accounts, active Waku light node — combines all drains simultaneously. Device-side validation measurements are defined and ready to execute.
+Status Android was flagged by Android OS for high battery and CPU usage after an 8-hour overnight background soak on mobile data (96% → 31%, 65% consumed). The app was in WakuV2 Light mode with no active user interaction. **Two prior fixes (PR #20202 pausable services, PR #20882 mvds message-sending pause) are already present in the build under test — the drain persists regardless.** Static source code analysis of `4cf3d8e4b` identified **five single-factor hypotheses** and **five compound multi-factor hypotheses** that plausibly explain the remaining drain. The most critical findings are: (1) a 50ms keyboard polling timer in the Qt C++ layer that fires 20 times/second with no background guard — a **new finding not previously identified in any issue**; (2) the Qt event loop is not paused on Android `onPause()`, confirmed by PR #20882 author noting *"events piling up in the qt event loop while in the background"*; (3) a `NetworkConnectivityCallback` in the `:statusgo` process that fires `ConnectionChange` on every network capability change with no background throttle. These factors compound: the worst-case scenario — mobile data, multiple wallet accounts, active Waku light node — combines all drains simultaneously. Device-side validation measurements (T1–T5) are defined and ready to execute.
 
 ---
 
@@ -42,6 +42,16 @@ Status Android was flagged by Android OS for high battery and CPU usage after an
 Reference: [Google Drive video from reporter](https://drive.google.com/file/d/1gILDTMHMAZSzKT-Ffilc1em1wKuk5Ipz/view?usp=sharing)
 
 Normal Android idle drain for a Samsung flagship: ~1–2%/hour. Observed: ~8%/hour. **Delta attributable to Status: ~6%/hour.**
+
+**Independent replication — #20742:** Same device class (Samsung S21 Ultra, Android 15, v2.38 RC1), different reporter. 52% drain over 6 hours = **~8.7%/hr** — consistent with #21045. #20742 was closed by PR #20882; #21045 remains open.
+
+**Prior fix already in the build under test:**
+| PR | Merged | What it fixed | Still in `4cf3d8e4b`? |
+|----|--------|--------------|----------------------|
+| [#20202](https://github.com/status-im/status-app/pull/20202) | 2026-04-09 | Introduced pausable services + `PauseServices`/`ResumeServices` via `appStateChanged` | ✓ Yes |
+| [#20882](https://github.com/status-im/status-app/pull/20882) | 2026-05-18 | Paused mvds message-sending loops in background; added `MESSAGING_REPAUSE_DELAY_MS = 60s` wake on notification reply. Closed #20742. | ✓ Yes |
+
+**Critical implication:** Both fixes are already in the build under test. The ~8%/hr drain persists **after** these fixes. H1a (keyboard timer) and H2 (Waku radio) are the prime candidates for the remaining unresolved drain.
 
 ---
 
@@ -83,6 +93,8 @@ Activity.onPause()
 
 **Evidence:** Zero code pauses the Qt event loop on `Activity.onPause()`. Qt 6 on Android does not auto-suspend the event loop when the activity is paused. The loop runs until `onDestroy`. All QML `Timer {}` components, property bindings, and signal handlers continue firing.
 
+**Corroboration (PR #20882):** alexjba's PR description explicitly states *"less events piling up in the qt event loop while the app is in the background"* as an expected outcome of the messaging pause fix. This is a developer acknowledgement that Qt loop accumulation in background is an observed problem — raising confidence that H1 is real even before device measurement.
+
 **Source:** `mobile/android/qt6/src/app/status/mobile/StatusQtActivity.java:56-61` — `onPause` only calls `setUiVisible(false)`.
 
 **Expected drain signature:** UI process (`im.status.ethereum`) shows > 2% CPU sustained after 60s background with screen locked.
@@ -91,6 +103,7 @@ Activity.onPause()
 
 ### H1a — 50ms Keyboard Poll Timer `[CODE — 90%]`
 *Scoring: timer starts unconditionally (+40), no stop path anywhere in codebase (+20), architectural pattern (+15), explicit 20 FPS comment confirms intent (+20) = 95% → reduced to 90% pending device confirmation*
+*Prior issues: **none** — not identified in #21045, #20742, #20882, or any prior issue. New finding from this investigation.*
 **Evidence:** `SystemUtilsInternal` (C++ singleton, Android-only) starts an unconditional 50ms repeat `QTimer` that makes two JNI calls per tick:
 
 ```cpp
@@ -162,7 +175,9 @@ A debouncer (1000ms delay, 500ms check interval) limits frequency but does not p
 
 **Source:** `mobile/android/qt6/src/app/status/mobile/ipc/StatusGoService.java:161`
 
-**Build-specific amplifier (target build `4cf3d8e4b`):** `MESSAGING_REPAUSE_DELAY_MS = 60_000L` — after any inline notification reply, the messaging service is *resumed* and stays active for 60 additional seconds before being re-paused. Every background notification reply in the overnight test extends messaging service activity by 1 minute. If the reporter replied to messages during the 8-hour test, this compounds H4's baseline cost. Source: `journal.md DELTA 2`.
+**Build-specific amplifier (target build `4cf3d8e4b`):** `MESSAGING_REPAUSE_DELAY_MS = 60_000L` — after any inline notification reply, the messaging service is *resumed* and stays active for 60 additional seconds before being re-paused. Every background notification reply in the overnight test extends messaging service activity by 1 minute. If the reporter replied to messages during the 8-hour test, this compounds H4's baseline cost.
+
+**PR #20882 corroboration `[CODE-CONFIRMED — mechanism]`:** alexjba's PR description confirms the exact mechanism: *"we'll resume messenger for 60 seconds — enough to push the message through and then it will be paused again unless the app goes back to foreground."* The 60s value and the repause-on-reply design are intentional. The cost of this design choice (H4's actual battery impact) remains unmeasured — but the mechanism is confirmed by the PR author.
 
 **Note:** This is the least actionable hypothesis — messaging must stay alive for notifications. The question is whether its background cost is higher than expected, particularly when compounded by MESSAGING_REPAUSE_DELAY_MS on notification replies.
 
