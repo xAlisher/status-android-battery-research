@@ -14,15 +14,7 @@ im.status.ethereum:statusgo ← Separate foreground service (libstatus.so, Waku,
 ```
 Always measure **both** separately. Most devs only look at one.
 
-### Background Lifecycle Path
-```
-Activity.onPause()
-  → StatusGoStub.setUiVisible(false)                  [StatusQtActivity.java:59]
-    → StatusGoServiceClient.setUiVisible()             [async, background thread]
-      → Binder IPC → StatusGoService.applyUiVisibility(false)
-        → nativeCall("PausableServices") → get list
-        → nativeCall("PauseServices", [list])          [all services EXCEPT "messaging"]
-```
+*Full lifecycle call chain with footnoted sources: `report.md § 2`.*
 
 ### What Gets Paused vs Not
 - **Paused in background:** all pausable status-go services (except messaging)

@@ -53,7 +53,7 @@ grep -rn "registerDefaultNetworkCallback\|registerNetworkCallback" --include="*.
 **Pattern:** Qt for Android does not auto-suspend the event loop on `Activity.onPause()`. All QML Timers, bindings, and signal handlers keep running.
 **Impact:** All Qt-side timers (including polling timers) run at full rate all night.
 **Detection:** Search for `onPause` handler — does it call anything that suspends the event loop?
-**Fix:** Call `QCoreApplication::processEvents()` with `ExcludeUserInputEvents | WaitForMoreEvents` or use `Qt::ApplicationActive` guards on all timers.
+**Fix:** Add an `applicationStateChanged` handler on each timer that calls `timer->stop()` when state is not `Qt::ApplicationActive` and `timer->start()` on resume. Do NOT use `QCoreApplication::processEvents()` with `WaitForMoreEvents` — this blocks the calling thread waiting for events (the opposite of suspending) and will cause a CPU spin or deadlock. The only correct mitigation is guarding each timer individually or adding explicit event loop quiescing via `QEventLoop` with manual exec/quit control.
 **Literature reference:** Known Qt Android issue — alexjba confirmed assumption was never validated.
 
 ### 5. Radio-Keeping Network Pattern `[ARCHITECTURAL]`

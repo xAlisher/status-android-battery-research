@@ -208,8 +208,6 @@ adb shell top -b -n 1 | grep "im.status.ethereum "  # no suffix = UI process
 
 ### H-template: Waku ping frequency
 ```bash
-# Use /proc/net/dev — tcpdump is NOT available on stock Samsung Android
-# Do NOT use: adb shell tcpdump (binary absent on stock ROM)
 NET1=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
 sleep 60
 NET2=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
@@ -377,16 +375,19 @@ Use these when planning research sessions:
 | 3 | Baseline measurements | 10 min |
 | 3 | Single test run (10 min soak + analysis) | 25 min |
 | 3 | Full T1–T5 suite (single run each) | ~3 hours |
-| 3 | Full T1–T5 suite (N=5 runs, statistical) | ~4–5 hours |
+| 3 | Full T1–T5 suite (N=5 runs, statistical) | ~4–5 hours active |
+| 3 | **Charging time between N=5 runs** (device back to 100%) | **+3–5 hours idle** |
 | 6 | Analysis + journal update | 30 min |
 | 7 | Interim report (1–2 confirmed findings) | 30 min |
 | 7 | Final report update | 1 hour |
 | **Total (single runs)** | **Phase 0 + setup + T1–T5 + reporting** | **~6–8 hours** |
-| **Total (N=5 runs)** | **Phase 0 + setup + T1–T5 + reporting** | **~8–10 hours** |
+| **Total (N=5 runs, active)** | **Phase 0 + setup + T1–T5 + reporting** | **~8–10 hours active** |
+| **Total (N=5 runs, wall clock)** | **Including charging waits between runs** | **~11–15 hours wall clock** |
 
 How the totals are computed:
-- Single run path: 30+45+30+15+15+10+180+30+30+60 = 445 min ≈ 7.5h (rounded to 6–8h; lower bound if analysis is fast)
-- N=5 path: T1–T5 expands from ~180min to ~250min → 515 min ≈ 8.5h (rounded to 8–10h)
+- Single run path: 30+45+30+15+15+10+180+30+30+60 = 445 min ≈ 7.5h (rounded to 6–8h)
+- N=5 path: T1–T5 expands to ~250min active; charging to 100% takes 60–90 min per run on S20 FE → 4 recharges × ~75min = ~300min charging idle time
+- Wall clock for N=5: 515 min active + ~300 min charging ≈ 815 min ≈ 13.5h — plan across two sessions
 - Range reflects: source code analysis variance (30–60min) and retries required when results are INCONCLUSIVE
 
 ---

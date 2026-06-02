@@ -200,13 +200,7 @@ This fires a delayed check 10 seconds after **any** app state change (foreground
 4. Messaging service active → processing any incoming messages in background
 5. Wallet-tick cascade → price API calls after each Waku-delivered block
 
-**Drain model estimate:**
-- 65% battery / 8h = ~8% drain/hour
-- Normal Android idle: ~1-2%/hour
-- Delta attributable to Status: ~6%/hour
-- Qt keyboard timer alone at 20 wakes/sec: estimated ~1-2%/hour
-- Waku radio activity: estimated ~2-3%/hour
-- Combined: plausibly explains the observed drain
+*Drain model and arithmetic: see report.md § 4 MH5. Note: midpoint sum = 4%/hr; 6%/hr requires upper bounds simultaneously.*
 
 *H4: promoted to `report.md § 3` (H4). See there.*
 

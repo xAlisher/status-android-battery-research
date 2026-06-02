@@ -123,8 +123,8 @@ De-duplication only on `(type|expensive)` key pair. Fires unconditionally — no
 
 ---
 
-### H2 — Waku Light Mode Keepalives `[H — 65%]`
-*Scoring: explicit source comment confirms Waku runs regardless of pause (+40), P2P keepalive pattern known to cause radio drain (+15), interval unknown — can't confirm frequency is problematic (−10) = 45% base + mobile data worst-case condition (+20) = 65%*
+### H2 — Waku Light Mode Keepalives `[H — 45%]`
+*Scoring: explicit source comment confirms Waku runs regardless of pause (+20 — comment in source, not timer start), P2P keepalive pattern known to cause radio drain (+15), interval unknown — can't confirm frequency is problematic (−10) = 25% base + mobile data worst-case condition (+20) = 45%. Note: the original score of 65% incorrectly used +40 (the "timer starts unconditionally, no stop path" category) for a source comment. Correct evidence type is +20. Score corrected in Loop 2. Fix-order implication: H1a expected impact (70% × 2%/hr = 1.4%/hr) now exceeds H2 (45% × 3%/hr = 1.35%/hr) — H1a is the top-priority fix.*
 **Evidence:** Waku light clients must send periodic pings to relay nodes to maintain filter subscriptions (subscriptions expire). These pings run regardless of `PauseServices` state. The frequency is defined in status-go/waku — not inspectable without the vendored status-go source at the correct version.
 
 **Radio impact:** Each ping wakes the radio. On LTE/5G, the radio takes ~5s to return to low-power RRC Idle state after a transmission. If pings are ≤ 30s apart, the radio never reaches deep sleep.
@@ -156,7 +156,9 @@ A debouncer (1000ms delay, 500ms check interval) limits frequency but does not p
 
 **Source:** `mobile/android/qt6/src/app/status/mobile/ipc/StatusGoService.java:161`
 
-**Note:** This is the least actionable hypothesis — messaging must stay alive for notifications. The question is whether its background cost is higher than expected.
+**Build-specific amplifier (target build `4cf3d8e4b`):** `MESSAGING_REPAUSE_DELAY_MS = 60_000L` — after any inline notification reply, the messaging service is *resumed* and stays active for 60 additional seconds before being re-paused. Every background notification reply in the overnight test extends messaging service activity by 1 minute. If the reporter replied to messages during the 8-hour test, this compounds H4's baseline cost. Source: `journal.md DELTA 2`.
+
+**Note:** This is the least actionable hypothesis — messaging must stay alive for notifications. The question is whether its background cost is higher than expected, particularly when compounded by MESSAGING_REPAUSE_DELAY_MS on notification replies.
 
 ---
 
@@ -257,7 +259,7 @@ Backgrounded Status, 8 hours, mobile data, multiple accounts
          └── each API call: radio wake → connectivity change → H1b fires again
 ```
 
-**Estimated combined drain:** 6%/hour → 48% over 8 hours. Observed: 65% over 8 hours (8.1%/hr). The model accounts for most of the observed drain. Remaining gap may be attributable to screen-on periods or other background wake events not yet identified.
+**Estimated combined drain:** Component estimates are order-of-magnitude calibrations, not measurements. Midpoint arithmetic: 1.5 (H1a) + 2.5 (H2) = 4%/hr. The 6%/hr figure requires upper bounds simultaneously plus unquantified contributions from H1b, H4, H5. Observed: 8.1%/hr. The model leaves a 4.1%/hr gap at midpoints (not 2.1%/hr as H6 states — H6 used upper-bound components). All figures are pre-measurement estimates; device tests T1–T5 will replace these with real numbers.
 
 ---
 
@@ -285,7 +287,7 @@ adb shell ps -A | grep "im.status.ethereum " | grep -v ":statusgo"
 **Mann-Whitney U — calculation method:**
 ```python
 # Run this after collecting N=5 measurements for control and treatment
-# pip install scipy
+# pip install "scipy>=1.6.0"  — alternative='less' parameter requires scipy 1.6+
 from scipy.stats import mannwhitneyu
 
 control    = [val1, val2, val3, val4, val5]  # CPU% with app force-stopped
@@ -303,6 +305,11 @@ print(f"U={stat:.1f}, p={p:.4f}")
 ```bash
 # Run 5 times. Before each run: dumpsys batterystats --reset && sleep 10
 # Background app (power button — screen OFF)
+# IMPORTANT: KEYCODE_POWER toggles screen state. Ensure screen is ON before sending it,
+# otherwise it will turn the screen ON instead of locking it.
+# Verify screen state first: adb shell dumpsys power | grep "mWakefulness"
+# "mWakefulness=Awake" → screen is ON → KEYCODE_POWER will lock ✓
+# "mWakefulness=Asleep" → screen is OFF → KEYCODE_POWER will turn ON ✗ (app stays background but wrong power state)
 adb shell input keyevent KEYCODE_POWER
 # Disable WiFi to isolate from network noise
 adb shell svc wifi disable
@@ -323,18 +330,27 @@ adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
 - 0.5–2%: INCONCLUSIVE — extend to 15min soak. If still 0.5–2% after 15min: record exact median, note "ambiguous signal — Qt loop may be intermittently active." Add Perfetto trace (see `skills/android-battery-measurement-toolkit.md`) to get per-wakelock attribution before escalating.
 
 ### T2 — Validate H2 (Waku radio activity)
+
+**Critical:** H2's severity argument is specific to **mobile data** (LTE radio sleep failure). T2 must be run on mobile data, NOT WiFi. On Samsung devices, the mobile data interface is `rmnet_data0` (or `ccmni0`), not `wlan0`. Running this test on WiFi produces a valid WiFi measurement but cannot confirm the LTE radio-sleep failure mode central to H2.
+
 ```bash
-# Run 5 times. Between runs: svc wifi disable && sleep 10 && svc wifi enable && sleep 30
-adb shell svc wifi enable
-NET1=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
-sleep 300  # 5 min background
-NET2=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
-echo "RX bytes in 5min background: $((NET2 - NET1))"
+# Run 5 times on MOBILE DATA (WiFi disabled).
+# First: identify the mobile data interface on this device
+adb shell cat /proc/net/dev | grep -v "lo:\|wlan\|dummy\|sit\|p2p"
+# Use whichever interface shows non-zero TX/RX bytes (typically rmnet_data0 on Samsung)
+IFACE="rmnet_data0"  # verify this first
+
+adb shell svc wifi disable
+NET1=$(adb shell cat /proc/net/dev | grep "$IFACE" | awk '{print $2}')
+sleep 300  # 5 min background, screen locked
+NET2=$(adb shell cat /proc/net/dev | grep "$IFACE" | awk '{print $2}')
+echo "RX bytes in 5min background (mobile): $((NET2 - NET1))"
 # Record for Mann-Whitney vs control (app force-stopped, same 5min window)
 ```
-**Verdict threshold (median across 5 runs):**
-- > 250KB in 5min (50KB/min) → Waku actively communicating → H2 CONFIRMED
+**Verdict threshold (median across 5 runs, mobile data):**
+- > 250KB in 5min (50KB/min) → Waku actively communicating on cellular → H2 CONFIRMED
 - < 50KB in 5min → H2 REJECTED or pings very infrequent
+- Note: WiFi results from T5 are informational only — T2 is the H2 validation test and must use mobile data.
 
 ### T3 — Validate H1b (NetworkConnectivityCallback)
 ```bash

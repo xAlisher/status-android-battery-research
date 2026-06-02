@@ -64,8 +64,4 @@ adb shell top -b -n 1 | grep "im.status.ethereum"
 # Network bytes (tcpdump NOT available on stock Samsung)
 adb shell cat /proc/net/dev | grep wlan0
 
-# Thresholds (S20 FE baseline, app backgrounded screen locked)
-# UI process CPU > 2% → Qt event loop running (H1/H1a signal)
-# :statusgo CPU > 5% → backend active in background
-# RX bytes/min > 50KB → Waku/radio active
 ```

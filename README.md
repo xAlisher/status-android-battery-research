@@ -60,15 +60,4 @@ See `skills/INDEX.md` for the full skill guide.
 
 ## Epistemological Framework
 
-Every claim in this research carries a state tag:
-
-| Tag | Meaning |
-|-----|---------|
-| `[CODE — X%]` | Directly in source, probability scored from evidence |
-| `[H — X%]` | Hypothesis with prior probability, not yet measured |
-| `[CONFIRMED — X%]` | Device measurement confirmed, exact value recorded |
-| `[REJECTED]` | Measurement contradicted hypothesis |
-| `[INCONCLUSIVE]` | Measurement was noisy — better metric needed |
-| `[? — unknown]` | Requires external data |
-
-A claim without a tag is not a finished claim.
+All claims carry a state tag (`[CODE]`, `[H — X%]`, `[CONFIRMED]`, `[REJECTED]`, `[INCONCLUSIVE]`, `[?]`). Full definitions: `research/report.md` header block. A claim without a tag is not a finished claim.

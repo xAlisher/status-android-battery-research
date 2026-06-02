@@ -78,9 +78,37 @@ See `README.md` for the annotated file tree.
 
 ---
 
+### Loop 2 — Redundancy + Adversarial pass
+
+**Redundancy agent: 8 findings (R1–R8)**
+**Adversarial agent: 5 failures, 5 missing, 5 load-bearing (F1–F5, M1–M5, LB1–LB5)**
+
+**Supervisor decisions — executed:**
+
+| Item | Decision | Rationale |
+|------|----------|-----------|
+| R3 | Remove journal.md "Background Lifecycle Path" ASCII chain | Report.md §2 is canonical. Replaced with pointer + footnote note. |
+| R2 | Remove INDEX.md threshold comment block (CPU %>2%/5%, RX bytes/min >50KB) | Thresholds defined in android-controlled-battery-experiment.md and android-battery-measurement-toolkit.md. INDEX quick ref is for commands, not thresholds. |
+| R7 | Remove inline tcpdump NOTE comment from research-protocol.md Waku ping code block | Anti-patterns section (line 445) already states "Don't use tcpdump on stock Samsung." Inline comment was duplicate. |
+| R8 | Replace journal.md MH5 drain model prose with pointer to report.md §4 MH5 | report.md §4 MH5 is canonical. Journal version was unsourced arithmetic with wrong midpoint sum (claimed 6%/hr, actual 4%/hr). |
+| F3 | H2 score corrected 65% → 45% | Used +40 (timer no stop path) for source comment. Correct category is +20. Fix-order inversion: H1a expected impact (70%×2%/hr = 1.4%/hr) now exceeds H2 (45%×3%/hr = 1.35%/hr). |
+| F4 | T2 rewritten to use mobile data interface (rmnet_data0) | H2 is a cellular radio sleep hypothesis. wlan0 shows 0 bytes on cellular. Test was structurally invalid — would have produced false REJECTED for H2. |
+| M5 | Pattern 4 fix corrected in android-energy-code-smells.md | processEvents(WaitForMoreEvents) blocks calling thread — causes CPU spin/deadlock, opposite of suspending. Replaced with applicationStateChanged handler guidance + explicit warning against WaitForMoreEvents. |
+| F1 | Charging time added to time estimates table | N=5 runs require 4 recharges × ~75min = ~300min idle. Wall clock = ~11–15h, not ~8–10h active. |
+| LB5 | MESSAGING_REPAUSE_DELAY_MS finding promoted to report.md H4 | Was only in journal.md DELTA 2 — would be lost if journal trimmed. Now load-bearing reference in H4 section. |
+| R6 | README state tag table removed, replaced with pointer | Full table now in report.md header block (canonical). README kept "A claim without a tag is not a finished claim" + pointer. |
+| F-scipy | scipy version pinned ≥1.6.0 | alternative='less' added in 1.6.0. Unpinned would silently fail on older envs. |
+| F-H4 | H4 updated with MESSAGING_REPAUSE_DELAY_MS amplifier | Build-specific constant identified in journal DELTA 2. Explicit note: value may differ across builds. |
+| F-screen | KEYCODE_POWER screen state note added to T1 setup | Screen-on vs screen-off has significant Android power management differences. Must be screen-locked for valid drain measurement. |
+
+**Deferred to Loop 3 (load-bearing, unchanged from agent reports):**
+- T2 no new deferrals — all Loop 2 items executed
+
+---
+
 ## Removals Log
 
-*See Loop 1 supervisor decisions above.*
+*See Loop 1 and Loop 2 supervisor decisions above.*
 
 ---
 
