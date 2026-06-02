@@ -18,6 +18,8 @@ All files follow the fieldcraft atomic recipe schema (YAML frontmatter + Problem
 | `android-battery-measurement-toolkit.md` | Choosing the right ADB/Perfetto tool for a given measurement |
 | `android-controlled-battery-experiment.md` | Designing statistically valid N=5 experiments, Joule conversion |
 | `battery-research-interim-reporting.md` | Triggering and formatting interim GitHub reports mid-research |
+| `go-mod-replace-sum-tidy.md` | Cleaning orphaned go.sum entries after adding a replace directive |
+| `companion-pr-timing-race.md` | Avoiding sha_mismatch in status-go companion PR Check workflow |
 
 ## File Descriptions
 
@@ -44,6 +46,16 @@ Protocol for statistically valid Android battery experiments: N=5 runs, controll
 Mann-Whitney U test (scipy), Joule conversion (1% ≈ 623J on S20 FE), Status-specific thresholds
 (UI process >2% CPU = Qt loop running, >50KB/min network = Waku active).
 - Source: arxiv:2604.25587 (879 configs, 15 runs each)
+
+### `go-mod-replace-sum-tidy.md`
+Remove orphaned `h1:` entries from go.sum after adding a `replace` directive. Local `go mod tidy`
+silently skips removal when unrelated tidy errors (shallow clone, missing generated files) block
+completion; CI golangci-lint catches it via its own tidy diff.
+
+### `companion-pr-timing-race.md`
+The status-go `Check` workflow fires within ~15s of a push. If the companion status-app PR's
+`vendor/status-go` submodule hasn't been updated yet, the SHA won't match. Pattern: update
+companion BEFORE pushing status-go, or `gh run rerun --failed` immediately after.
 
 ### `battery-research-interim-reporting.md`
 Trigger conditions for posting interim findings before research completes. GitHub comment template
