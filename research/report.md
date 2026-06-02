@@ -633,98 +633,120 @@ Possible sources not yet hypothesised:
 
 ## 6. Recommendations
 
-### Immediate (address before next RC)
+All recommendations below are grounded in confirmed measurements. Impact estimates derive directly from T2–T5b batterystats data.
 
-**R1 — Guard keyboard timer for background**
-`ui/StatusQ/src/systemutilsinternal.cpp:74`
-```cpp
-// Current: unconditional start
-keyboardTimer->start();
+---
 
-// Fix: stop when app not active
-connect(qApp, &QGuiApplication::applicationStateChanged,
-        keyboardTimer, [keyboardTimer](Qt::ApplicationState s) {
-    if (s == Qt::ApplicationActive) keyboardTimer->start();
-    else keyboardTimer->stop();
-});
+### R1 — Extend Waku filter subscription keepalive interval in background `[HIGH IMPACT — confirmed]`
+
+**Root cause:** Waku light mode clients renew filter subscriptions every ~13.5 min (observed from CPU spike timing in T3). Each renewal wakes the LTE modem. The radio requires ~5–10s to return to RRC Idle after each transmission. Result: 55% LTE radio duty cycle on a bare account → 95.5 mAh/hr radio drain attributed to Status (T4).
+
+**Fix:** In status-go, detect `uiVisible=false` and extend the filter subscription renewal interval from ~13.5 min to ≥60 min while backgrounded. Restore on foreground.
+
+**Where to look:** `vendor/status-go` → Waku light client filter subscription management. The exact interval constant will be there. `PauseServices`/`ResumeServices` already exist in `StatusGoService.java` — this follows the same pattern.
+
+**Expected impact:** Extending interval from 13.5 → 60 min reduces radio wake frequency by ~4.4×. Radio duty cycle drops from ~55% to ~12%. Estimated drain reduction: **97.5 → ~22 mAh/hr** on a bare account, proportionally better on loaded accounts.
+
+**Risk:** Filter subscriptions may expire between renewals → missed messages in background. Must test: send a message to a backgrounded device, confirm receipt. Waku filter subscription TTL must be verified against the new interval. If TTL < 60 min, the interval must stay below TTL — but even 30 min would halve the drain.
+
+**Validation:** Run T4 again after fix. Target: `mobile_radio` duty cycle < 20%, drain rate < 30 mAh/hr.
+
+---
+
+### R2 — Throttle mailserver history sync in background `[HIGH IMPACT — confirmed]`
+
+**Root cause:** When the app reconnects after a long disconnect (airplane mode, overnight no-signal, reinstall), it initiates full mailserver history catchup for all contacts and communities. Measured: **321 MB RX in 30 min** (T5), radio 99% duty cycle, ~425 mAh/hr. No throttle or budget exists for this operation when performed in background.
+
+**Fix:** In the mailserver sync path, check `uiVisible` before initiating large history catchup. When backgrounded, limit sync to a small budget (e.g. 5 MB or last 15 min of messages — enough to deliver notifications) and defer full catchup until the app is foregrounded.
+
+**Where to look:** `src/app_service/service/mailservers/service.nim` — mailserver request initiation. The `uiVisible` state is available via the existing `AppStateChange` mechanism.
+
+**Expected impact:** Eliminates the sync storm scenario entirely for backgrounded reconnects. For users whose drain report began after a period of no connectivity, this fix alone may resolve the reported 65% overnight drain.
+
+**Risk:** Low. Users still receive notifications (the minimal sync covers recent messages). Full history appears when they open the app. This is standard behaviour for all messaging apps (WhatsApp, Signal do not sync full history in background).
+
+---
+
+### R3 — Re-enable `syncingOnMobileNetwork` toggle (v2.39) `[MEDIUM IMPACT — planned]`
+
+**Root cause:** The WiFi-only sync setting is hidden (`MessagingView.qml:77`: `visible: false`) and hardcoded to `true` in v2.38 (`settings/service.nim:309`). All users sync on both networks regardless of preference.
+
+**Fix:** Already planned for v2.39. Remove the hardcoded `return true` and un-hide the UI toggle.
+
+```nim
+# settings/service.nim:309 — restore this line:
+# self.settings.syncingOnMobileNetwork
 ```
-**Impact:** Eliminates 20 JNI calls/sec in background. Zero functional regression — keyboard height is irrelevant when app is backgrounded.
 
-**R2 — Guard NetworkConnectivityCallback for background**
-`StatusGoService.java` — `dispatchConnectionChange()` fires unconditionally on every network capability change regardless of app visibility. The `:statusgo` process has no Qt event loop state — it needs its own `uiVisible` check.
+**Expected impact:** Users who toggle "Wi-Fi only" avoid all LTE radio drain from Waku entirely when on cellular. For users who experienced the reported drain, this is a direct user-controllable mitigation while R1/R2 are developed.
 
-**Caution:** A blanket `if (!uiVisible) return` would break Waku reconnection after network interruptions, since Waku needs to know when the network comes back even in background. The fix must be selective — suppress cosmetic capability churn (e.g. signal strength changes that do not change type or metered status) but allow genuine network-up/network-down transitions through. Recommended approach: keep the existing de-duplication on `(type, expensive)` and add rate-limiting for background state rather than a hard suppress. File this as Medium-risk — requires validation that Waku reconnect still works after the change.
-
-**R3 — Validate Qt event loop suspension on Android**
-Explicitly test whether the Qt event loop suspends when the Android activity is paused. If it doesn't, add explicit suspension. alexjba's comment in the issue suggests this was assumed but never validated.[^4]
-
-[^4]: alexjba, [#21045 comment](https://github.com/status-im/status-app/issues/21045#issuecomment-4563218143): *"I've assumed the qt event loop is paused by default when going into background. Now I think we should validate that as well... If that wakes up, the battery is dead."*
-
-### Medium-term
-
-**R4 — Waku filter subscription keepalive interval**
-Audit the Waku light mode ping interval in status-go. If it's < 60s, consider increasing for background state. jrainville's comment confirms this is already on the radar.[^5]
-
-[^5]: jrainville, [#21045 comment](https://github.com/status-im/status-app/issues/21045#issuecomment-4555832986): *"We need to check what we can disable when the app is in the background."*
-
-**R5 — Suppress wallet-tick cascade in background**
-`wallet-tick-reload` handlers in `service_main.nim` and `service_account.nim` should check an `inBackground` flag before calling `rebuildMarketData()`. Price data doesn't need to be fresh while the user can't see it.
-
-**R6 — Reduce duplicate network monitoring**
-The Java `NetworkConnectivityCallback` and the Qt `NetworkChecker` both push `ConnectionChange` to status-go. Consolidate: either the Java layer owns it (already in `:statusgo` process, more reliable) or the Qt layer owns it — not both.
-
-### Preventive (test gates)
-
-**G1 — Background CPU regression test**
-Automated test: install APK, log in, background for 10 min, measure `dumpsys cpuinfo` for both processes. Fail if UI process > 2% sustained or `:statusgo` > 5% sustained.
-
-**G2 — Radio activity test**
-Automated test: background for 5 min on WiFi, measure `RX bytes/min`. Fail if > 50KB/min. This catches excessive Waku pings.
-
-**G3 — Timer audit in CI**
-Static analysis lint rule: any `QTimer` instantiation must have a corresponding `stop()` call in an `applicationStateChanged` handler, OR must demonstrate via comment why continuous firing is intentional.
-
-**G4 — Background soak in release checklist**
-Add to RC checklist: 30-min background soak test with `dumpsys batterystats` before → after. Numeric threshold required (not just "it seemed fine").
+**Risk:** None — the setting and UI already exist, just hidden. Confirm the backend respects the flag before enabling.
 
 ---
 
-## 7. Interim Report Protocol
+### R4 — Rate-limit `NetworkConnectivityCallback` in background `[MEDIUM IMPACT — defensive]`
 
-**Do not wait for T1–T5 to complete before sharing findings.**
+**Root cause:** `StatusGoService.java:291-300` — `NetworkConnectivityCallback.onCapabilitiesChanged` fires on every network capability change with no background guard. Each fire dispatches a `ConnectionChange` RPC. On LTE, capability changes are frequent during normal operation (signal fluctuations, handoffs).
 
-| Trigger | Action |
-|---------|--------|
-| Any single hypothesis confirmed | Post interim comment to #21045 with finding + fix recommendation |
-| Any hypothesis rejected (unexpected) | Post to #21045: what was ruled out and why |
-| All hypotheses inconclusive after T1–T4 | Post escalation note: expanding scope |
+**Fix:** Add a background rate-limiter. Allow the first `ConnectionChange` after a genuine network type change through immediately (WiFi ↔ cellular, connected ↔ disconnected). Suppress subsequent calls within a 30-second window when `uiVisible=false`.
 
-**Interim comment format and definition of done:** `skills/battery-research-interim-reporting.md`
+**Caution:** Do NOT add a blanket `if (!uiVisible) return` — Waku needs to know when the network comes back after an outage. The rate-limit approach preserves this while suppressing churn.
+
+**Expected impact:** Reduces radio wake events between Waku keepalive cycles. Secondary effect — reduces unnecessary `ConnectionChange` processing in status-go.
 
 ---
 
-## 8. Data Collection Plan
+### R5 — Suppress wallet-tick cascade in background `[LOW IMPACT]`
 
-When device is available (currently charging to 100%):
+**Root cause:** `wallet-tick-reload` signals from status-go trigger `rebuildMarketData()` + `fetchPrices` (HTTP to external price API) via `service_main.nim:147-157`. If status-go processes incoming blocks in background, this fires in background too.
 
-| Test | Duration | Data captured | Validates |
-|------|----------|--------------|-----------|
-| T1 | 10 min | `top` per 30s, both processes | H1, H1a |
-| T2 | 5 min | `/proc/net/dev` delta | H2 |
-| T3 | 2 min | logcat ConnectionChange | H1b |
-| T4 | 10 min | `cpuinfo`, `batterystats` | MH1 |
-| T5 | 5 min × 2 | network bytes (WiFi vs LTE) | MH2 |
+**Fix:** Add `if not self.appService.isBackground(): rebuildMarketData()` check (or equivalent `inBackground` flag) before price API calls.
 
-All raw data will be appended to `journal.md` under session results.
+**Expected impact:** Eliminates background HTTP calls to price APIs. Minor radio contribution but also reduces unnecessary network chatter.
 
 ---
 
-## 9. Open Questions
+### Test Gates (add to RC checklist)
 
-1. Does the Qt Android platform plugin pause the event loop on `onPause`? (alexjba assumed yes — code suggests no)
-2. What is the actual Waku light mode filter subscription ping interval? (needs status-go source at exact vendored version)
-3. Does Android kill the UI process after some background time on Android 13 (our test device) vs Android 15 (reporter's device)? Different OSes may show different behaviour.
-4. Is `wallet-tick-reload` emitted during background operation or only on foreground balance checks?
+**G1 — 30-min cellular soak (loaded account)**
+```bash
+# Run on device with: notifications=DEFAULT, mobile data, ~50 contacts
+# Pass threshold: mobile_radio < 50 mAh in 30 min
+adb shell dumpsys batterystats --charged | grep "u0a415.*mobile_radio"
+```
+Rationale: T4 baseline = 67.8 mAh / 42 min. After R1 fix, target < 20 mAh / 42 min.
+
+**G2 — Network packet rate in background**
+```bash
+# Sample /proc/net/dev every 60s for 5 min, background app on cellular
+# Pass threshold: < 500 packets/min active radio (T4 bare baseline = 323)
+# T5b loaded baseline = 6,865 — this threshold should drop after R1
+```
+
+**G3 — Sync budget on reconnect**
+After implementing R2: disconnect network for 30 min, reconnect while backgrounded, measure RX bytes in first 5 min. Pass: < 10 MB. Fail: > 50 MB (current behavior = 321 MB).
+
+---
+
+### Priority order
+
+| Rec | Fix | Impact | Effort | Risk |
+|-----|-----|--------|--------|------|
+| **R1** | Waku keepalive interval in background | **~4× drain reduction** | Medium (status-go) | Medium (test subscription TTL) |
+| **R2** | Background sync throttle on reconnect | **Eliminates sync storm** | Medium (mailserver service) | Low |
+| **R3** | Re-enable `syncingOnMobileNetwork` | User mitigation now | Low (un-hide UI) | Low |
+| R4 | Rate-limit NetworkConnectivityCallback | Secondary reduction | Low | Medium |
+| R5 | Suppress wallet-tick in background | Minor | Low | Low |
+
+R1 and R2 together address the primary measured drain. R3 is a quick user-facing mitigation that can ship in v2.39 as planned. R4 and R5 are cleanup.
+
+---
+
+## 7. Open Questions
+
+1. **Waku filter subscription TTL** — what is the actual TTL of a light mode filter subscription in the vendored status-go? This determines the minimum safe keepalive interval for R1.
+2. **Android 15 Doze behaviour** — all measurements on Android 13. Android 15 (reporter's device) may have different Doze scheduling. The drain could be higher or lower. Needs replication on Android 15 device.
+3. **Waku keepalive on WiFi** — T3 shows only 1.632 mAh/hr on WiFi despite the same keepalive interval. WiFi radio wake cost is much lower than LTE. R1 is most impactful on cellular but worth applying universally.
 
 ---
 
