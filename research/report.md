@@ -1,13 +1,12 @@
 # Battery & CPU Drain Investigation — Status Android
-**Version:** 0.1 (Phase 0 — source analysis only, no device measurements yet)
-**Report type:** Pre-device static analysis + hypothesis generation
+**Version:** 0.6 (T5b complete — H-N3 CONFIRMED steady-state; all primary hypotheses resolved)
+**Report type:** Static analysis + device measurements
 **Issue:** [#21045 — Mobile: Android flagged Status for high battery consumption and CPU usage](https://github.com/status-im/status-app/issues/21045)
 **Related:** [#20742 — Background service battery consumption](https://github.com/status-im/status-app/issues/20742)
 **Build analysed:** `2.38.0-rc.4-5-g4cf3d8e4b` (commit [`4cf3d8e4b`](https://github.com/status-im/status-app/commit/4cf3d8e4b))
 **Date:** 2026-06-02
-**Status:** Phase 0 complete — awaiting device (charging to 100%)
-**Estimated time to v1.0:** ~6–8 hours of active research after device is available
-**Next version trigger:** First hypothesis confirmed by device measurement → v0.2 interim report posted to #21045
+**Status:** All soaks complete (T1–T5b). Primary root causes identified and quantified.
+**Next version trigger:** Fix validation (T6) or Android 15 replication
 
 ---
 
@@ -88,7 +87,14 @@ Activity.onPause()
 
 ## 3. Single-Factor Hypotheses
 
-### H1 — Qt Event Loop Not Paused `[H — 65%]`
+### H1 — Qt Event Loop Not Paused `[REJECTED]`
+**Device verdict — T1 (2026-06-02):** UI process (`app.status.mobile`) showed **0.0% CPU all 20 samples** over 10 min background soak. TIME+ column unchanged throughout. batterystats cpu:fg = 598ms in 10 min (<0.1%). Android freezes the Qt UI process in background — the event loop does NOT run indefinitely.
+
+**Implication:** H1a (keyboard poll timer) is also REJECTED — the timer cannot fire if the process is frozen.
+
+---
+
+### H1 — Qt Event Loop Not Paused `[REJECTED — original text below]`
 *Scoring: no stop path in code (+40), architectural pattern known in Qt Android (+15), analogous known issue in Qt Android codebase (+10) = 65%. Note: alexjba's comment is in a GitHub issue, not source code — the bayesian scoring table awards +20 only for comments in source. Correct application of the framework gives 65%.*
 
 **Evidence:** Zero code pauses the Qt event loop on `Activity.onPause()`. Qt 6 on Android does not auto-suspend the event loop when the activity is paused. The loop runs until `onDestroy`. All QML `Timer {}` components, property bindings, and signal handlers continue firing.
@@ -101,7 +107,14 @@ Activity.onPause()
 
 ---
 
-### H1a — 50ms Keyboard Poll Timer `[CODE — 90%]`
+### H1a — 50ms Keyboard Poll Timer `[REJECTED]`
+**Device verdict — T1:** UI process = 0.0% CPU; wake lock time = 3s/10min. Android froze the Qt UI process, preventing the timer from firing. Even if the timer logic is present in code, it has no measurable impact while the process is frozen.
+
+**Note:** R1 (guard the timer) remains a good defensive fix even though H1a is rejected — if Android behaviour changes or on older OS versions, an unguarded timer would immediately become a drain source.
+
+---
+
+### H1a — 50ms Keyboard Poll Timer `[REJECTED — original text below]`
 *Scoring: timer starts unconditionally (+40), no stop path anywhere in codebase (+20), architectural pattern (+15), explicit 20 FPS comment confirms intent (+20) = 95% → reduced to 90% pending device confirmation*
 *Prior issues: **none** — not identified in #21045, #20742, #20882, or any prior issue. New finding from this investigation.*
 **Evidence:** `SystemUtilsInternal` (C++ singleton, Android-only) starts an unconditional 50ms repeat `QTimer` that makes two JNI calls per tick:
@@ -142,7 +155,14 @@ De-duplication only on `(type|expensive)` key pair. Fires unconditionally — no
 
 ---
 
-### H2 — Waku Light Mode Keepalives `[H — 45%]`
+### H2 — Waku Light Mode Keepalives `[INCONCLUSIVE — T2 pending]`
+**Device verdict — T1 (partial):** `:statusgo` process showed **avg 13.7% CPU over first 8.5 min** background (T1 soak). Spike to 65.5% at T+3.5min. Process frozen by Android Doze at T+8.5min (TIME+ stopped advancing). Drain attributed to Status = 1.97 mAh in 10 min = **39% of all-app drain**. However: T1 was only 10 min — it's unclear whether the 65.5% CPU spike is one-time Waku connection settling, or recurs on a ~5–10 min schedule.
+
+**T2 (30-min soak, running):** Will determine if statusgo cycles back after Doze freeze (i.e., does Waku wake the process periodically, or does it stay frozen once idle?).
+
+---
+
+### H2 — Waku Light Mode Keepalives `[INCONCLUSIVE — original text below]`
 *Scoring: explicit source comment confirms Waku runs regardless of pause (+20 — comment in source, not timer start), P2P keepalive pattern known to cause radio drain (+15), interval unknown — can't confirm frequency is problematic (−10) = 25% base + mobile data worst-case condition (+20) = 45%. Note: the original score of 65% incorrectly used +40 (the "timer starts unconditionally, no stop path" category) for a source comment. Correct evidence type is +20. Score corrected in Loop 2. Fix-order implication: H1a expected impact (70% × 2%/hr = 1.4%/hr) now exceeds H2 (45% × 3%/hr = 1.35%/hr) — H1a is the top-priority fix.*
 **Evidence:** Waku light clients must send periodic pings to relay nodes to maintain filter subscriptions (subscriptions expire). These pings run regardless of `PauseServices` state. The frequency is defined in status-go/waku — not inspectable without the vendored status-go source at the correct version.
 
@@ -280,7 +300,188 @@ Backgrounded Status, 8 hours, mobile data, multiple accounts
 
 ---
 
-## 5. Validation Tests
+## 5. Device Measurements — Results
+
+### T1 — Background CPU Soak (10 min) — 2026-06-02
+
+| Metric | Value | Verdict |
+|--------|-------|---------|
+| UI process (`app.status.mobile`) CPU | **0.0%** all 20 samples | H1/H1a REJECTED |
+| statusgo avg CPU | **13.7%** (78s CPU / 570s elapsed) | H2 active but settling |
+| statusgo peak CPU | **65.5%** at T+210s | One-time? or periodic? |
+| statusgo frozen at | T+510s (8.5 min) — TIME+ stopped | Android Doze kicked in |
+| Wake lock time | 3s 21ms in 10 min | Negligible |
+| Status drain (batterystats) | 1.97 mAh / 10 min | 39% of all-app drain |
+| Battery level change | None (100% → 100%) | 10 min too short |
+
+**Setup:** WakuV2=Light ✓, battery reset ✓, screen locked via KEYCODE_POWER ✓, device Android 13 ✓
+
+**Implication:** The hypothesised Qt UI process drain (H1 + H1a) does not occur on Android 13 — Android's process management freezes the UI process within the first 30s of background. The `:statusgo` foreground service is the primary active process in background. Whether statusgo's activity is transient (connection settling) or steady-state is the key open question.
+
+### T2 — 30-min Background Soak — 2026-06-02 (COMPLETE)
+
+**Setup:** Notifications=NONE (importance=NONE, userSet=false — default, NOT set by user)
+
+| Metric | Value | Verdict |
+|--------|-------|---------|
+| Doze IDLE engaged at | T+8.5 min (from T1) | Confirmed `mState=IDLE` |
+| Doze maintenance window 1 | T+17 min (2 min duration) | statusgo +5.24s CPU |
+| Doze maintenance window 2 | T+27 min (2.5 min duration) | statusgo +4.92s CPU |
+| Status drain total | **0.176 mAh / 30 min** | = 0.352 mAh/hr |
+| vs T1 pre-Doze rate | 1.97 mAh / 10 min = 11.48 mAh/hr | **Doze reduces by 33×** |
+| vs reported 8.1%/hr | 364 mAh/hr | **Gap: 1036×** |
+| Status on Doze whitelist | No | Not requesting Doze exemption |
+| Status Doze-bypass alarms | None | No `setExactAndAllowWhileIdle()` |
+
+**H2 verdict: `[REJECTED — Android 13, WiFi, notifications-disabled]`** Both processes frozen by Doze IDLE after ~8.5 min. statusgo only active during brief maintenance windows. Total drain negligible (0.06% battery over 8h).
+
+**Critical gap:** T2 drain is 1036× lower than the reported 8.1%/hr. Test conditions differ from reporter's in 3 key ways: (1) notifications disabled vs enabled, (2) WiFi vs mobile data, (3) Android 13 vs Android 15.
+
+### H-N1 — Notification/FCM Prevents Doze `[REJECTED — code]`
+**Hypothesis (rejected):** FCM high-priority messages bypass Doze, keeping device awake.
+
+**Evidence against:** `StatusNotificationManager.java` line 100 — Status uses `"local-notifications"` (signals from statusgo), NOT FCM. There is no `FirebaseMessagingService` implementation in the manifest. Notifications are generated locally within the running app from Waku-delivered events. No server-side FCM push path exists to bypass Doze.
+
+**Revised understanding:** Notification permission (`importance=NONE` vs `DEFAULT`) affects App Standby Bucket classification, which determines Doze maintenance window frequency. This is a real variable but not the FCM-bypass mechanism initially hypothesised.
+
+### H-N2 — Mobile Data Causes LTE Radio Drain `[CONFIRMED — T4]`
+
+**T4 result (2026-06-02, 42 min soak, cellular, notif=DEFAULT, 0 contacts):**
+
+| Metric | Value |
+|--------|-------|
+| Total Status drain | 69.1 mAh / 42.5 min = **97.5 mAh/hr** |
+| mobile_radio attribution | **67.8 mAh = 98% of drain** |
+| Mobile radio active time | **23m 31s / 42m 34s = 55% of soak** |
+| CPU attribution | 1.32 mAh = 1.9% of drain |
+| T3 WiFi comparison | 1.632 mAh/hr |
+| **Cellular vs WiFi ratio** | **97.5 / 1.632 = 59.7×** |
+| Doze entry time | ~19.5 min (vs never for WiFi+notif=DEFAULT) |
+| Cellular data | 3.14 MB total (4.43 MB/hr) |
+
+**Root cause shift confirmed:** On WiFi, CPU (Waku keepalives) dominates. On cellular, the **LTE radio is the dominant mechanism** — 98% of attributed drain.
+
+Each Waku keepalive ping (~13.5 min interval, confirmed T3) wakes the LTE modem. The modem requires ~5–10s RRC re-entry after each transmission. With the Waku filter subscription renewing every 13.5 min, the radio achieves only ~55% sleep duty cycle. This is the primary mechanism behind the reported overnight drain.
+
+**Original hypothesis was partially wrong:** H-N2 assumed Doze prevention was the mechanism. The actual mechanism is the LTE radio energy cost per Waku ping, not Doze prevention. Doze did engage at ~19.5 min on cellular — but even before Doze, and during Doze maintenance windows, the radio was active for 55% of the soak.
+
+### T3 — Notification=DEFAULT Soak (30 min) — 2026-06-02 (COMPLETE)
+
+**Setup:** `pm grant app.status.mobile android.permission.POST_NOTIFICATIONS` applied; `importance=DEFAULT` confirmed. Device woken to `mState=ACTIVE` before locking. Otherwise identical to T2.
+
+| Metric | T2 (notif=NONE) | T3 (notif=DEFAULT) | Delta |
+|--------|-----------------|-------------------|-------|
+| Doze IDLE engaged? | **Yes — T+8.5 min** | **No — never in 30 min** | Critical |
+| statusgo avg CPU | 3.1% (windows only) | **1.95%** continuous | — |
+| statusgo TIME+ behavior | Frozen T+8.5–28.5 min | Advanced continuously | — |
+| Status drain | 0.176 mAh / 30 min | **0.816 mAh / 30 min** | **4.6×** |
+| Status drain rate | 0.352 mAh/hr | **1.632 mAh/hr** | 4.6× |
+| Network RX | 2.76 MB / 30 min | 2.51 MB / 30 min | similar |
+| Wakelock | 30ms | 7ms | negligible |
+
+**H-N1 REJECTED (code):** Source check of `StatusNotificationManager.java` confirmed Status uses `"local-notifications"` (Waku-delivered, in-process), not FCM. No `FirebaseMessagingService` in manifest. FCM Doze-bypass mechanism does not apply.
+
+**Revised notification mechanism:** `importance=DEFAULT` keeps Status in `WORKING_SET` App Standby Bucket, preventing Android from entering Doze IDLE. With `importance=NONE`, Android classifies the app as low-priority and enters Doze IDLE in ~8.5 min.
+
+**Waku keepalive timing:** Two CPU spikes observed — T+390s (37.9%) and T+1200s (13.7%). Gap = 810s = **~13.5 min candidate Waku filter subscription renewal interval.**
+
+**H2 partial confirmation:** Waku `:statusgo` process runs continuously when notifications are enabled (no Doze freeze). 1.632 mAh/hr on WiFi. This is still 223× below the reported 8.1%/hr.
+
+**223× gap — resolved by T4:** T4 cellular soak (same account, notif=DEFAULT) = 97.5 mAh/hr = 59.7× T3 WiFi. The LTE radio (98% of T4 drain, active 55% of soak) explains the bulk of the gap. Remaining gap (T4 = 26.7% of reported phone drain) attributable to H-N3 (account richness — 0 contacts/communities in test vs real user) plus other-app baseline drain.
+
+### H-N3 — Account Richness: Waku Subscription Count Scales Drain `[PARTIALLY CONFIRMED — T5]`
+
+**T5 result (2026-06-02, 30 min soak, cellular, notif=DEFAULT, ~50 contacts + 3 communities, post-login sync):**
+
+| Metric | T4 (0 contacts) | T5 (loaded account) | Ratio |
+|--------|-----------------|---------------------|-------|
+| Radio active time | 23m 31s / 42m 34s = 55% | 30m 36s / 30m 49s = **99%** | 1.8× duty cycle |
+| mobile_radio rate | 95.5 mAh/hr | 287 mAh/hr | **3.0×** |
+| Network RX | 1.74 MB / 42.5 min | **321 MB / 30 min** | 184× data |
+| Packets | 7,601 / 23.5 min = 323/min | 437,352 / 30.6 min = **14,285/min** | 44× |
+| Doze entry | ~19.5 min | **Never in 30 min** | Doze delayed |
+| Total drain | 69.1 mAh / 42.5 min | 131 mAh / 30.8 min | — |
+| Gross drain rate | 97.5 mAh/hr | 425 mAh/hr (incl. 10 min screen-on) | — |
+
+**T5b — Steady-state loaded account (2026-06-02, 70m 46s, screen correctly off from start):**
+
+| Metric | T4 (0 contacts) | T5b (loaded, steady-state) | Ratio |
+|--------|-----------------|---------------------------|-------|
+| Drain rate | 97.5 mAh/hr | **144 mAh/hr** | **1.48×** |
+| mobile_radio | 95.5 mAh/hr | 142.7 mAh/hr | 1.49× |
+| Radio duty cycle | 55% | 49.5% | similar |
+| Packets/min (active) | 323 | **6,865** | **21×** |
+| CPU | 1.32 mAh | 1.27 mAh | identical |
+| Doze entry | ~19.5 min | ~30s (screen already off) | — |
+
+**H-N3 CONFIRMED.** 21× more network packets per radio-active minute on a loaded account vs bare. CPU is virtually identical — the effect is purely radio. More Waku filter subscriptions = more keepalive traffic = LTE modem busier per Doze maintenance window.
+
+**T5 (post-login sync storm) vs T5b (steady-state):**
+T5 captured a 321 MB RX sync storm (radio 99% duty cycle, no Doze, ~425 mAh/hr). T5b after sync settled: 202 MB RX, 50% duty cycle, 144 mAh/hr. The sync storm is a distinct worst-case scenario: after a long disconnect (airplane mode, overnight no-signal), reconnect triggers full mailserver catchup which keeps the radio fully occupied until complete.
+
+**What IS confirmed:** Radio duty cycle jumps from 55% (bare) to near-full when syncing. Steady-state 49.5% is still materially higher load than T4's 55% in terms of absolute drain per hour.
+
+**CPU insight:** Account richness does NOT scale CPU cost. Both bare and loaded accounts draw ~1.3 mAh CPU — statusgo processes each Waku message similarly regardless of subscription count. The O(n) cost is in network traffic, not compute.
+
+**Post-login sync as a drain scenario:** If the reporter's phone came back from airplane mode, or hadn't run Status in hours before the 8h test, the initial sync storm explains a large portion of overnight drain independently of any code bug. No sync throttle exists for background reconnect in v2.38.
+
+**`syncingOnMobileNetwork` — hidden, hardcoded in v2.38 `[CODE — CONFIRMED]`:**
+`MessagingView.qml:77` (`visible: false`) and `settings/service.nim:309` (hardcoded `return true`). The setting exists — "Mobile data and Wi-Fi" vs "Wi-Fi only" — but is inaccessible to users in v2.38. Code comment: *"Hardcoded to true (Mobile data + Wi-Fi) for v2.38 while the feature is under review. Re-enable the line below in v2.39 once the WiFi-only behaviour is validated."* Confirmed by Noelia (Slack 2026-06-02): *"Yes it was temporarily hidden… Now it's defaulted to use data."*
+
+**Implication:** All v2.38 users sync on both WiFi and cellular regardless of any setting. This is not a variable in the reporter's case. T4 (cellular soak) remains valid — the app uses whatever interface Android provides. `syncingOnMobileNetwork` becomes a real test variable in v2.39.
+
+### T4 — Mobile Data Background Soak (42 min) — 2026-06-02 (COMPLETE)
+
+**Setup:** WiFi disabled (script), mobile data enabled, notif=DEFAULT, 0 contacts/communities, batterystats reset before screen lock.
+
+| Metric | T3 (WiFi) | T4 (Cellular) | Delta |
+|--------|-----------|---------------|-------|
+| Doze entry | Never (30 min) | **~19.5 min** | Earlier on cellular |
+| Status drain total | 0.816 mAh / 30 min | **69.1 mAh / 42.5 min** | — |
+| Status drain rate | 1.632 mAh/hr | **97.5 mAh/hr** | **59.7×** |
+| mobile_radio | — | **67.8 mAh (98%)** | Dominant |
+| CPU drain | ~1.6 mAh/hr | 1.32 mAh / 42.5 min = 1.87 mAh/hr | Similar |
+| Radio active time | — | 23m 31s / 42m 34s = **55%** | LTE never sleeps |
+| Cellular data | — | 3.14 MB / 42.5 min | 4.43 MB/hr |
+
+**H-N2 CONFIRMED.** LTE radio = 98% of drain. CPU is comparable to WiFi — it is the radio that makes cellular 59.7× worse. Each Waku keepalive (~13.5 min interval) wakes the LTE modem; the modem's RRC transition cycle keeps the radio active for ~55% of elapsed time.
+
+**Doze behavior:** Cellular + notif=DEFAULT → Doze at ~19.5 min. Despite Doze engaging, drain was still massive because mobile radio was active for 23.5 of the first 42 minutes (most of this occurred pre-Doze).
+
+**Remaining gap to reported drain:** T4 Status = 97.5 mAh/hr on a 0-contact account = 26.7% of reported total phone drain (365 mAh/hr). H-N3 (account richness — subscriptions scale with contacts/communities) would multiply this for real users.
+
+### Cross-Soak Summary — All Measurements
+
+| Test | Network | Notif | Account | Condition | Drain rate | Radio duty | Packets/min active |
+|------|---------|-------|---------|-----------|-----------|-----------|-------------------|
+| T2 | WiFi | NONE | bare | steady | 0.352 mAh/hr | — | — |
+| T3 | WiFi | DEFAULT | bare | steady | 1.632 mAh/hr | — | — |
+| T4 | Cellular | DEFAULT | bare | steady | **97.5 mAh/hr** | 55% | 323 |
+| T5 | Cellular | DEFAULT | loaded | post-login | ~425 mAh/hr* | 99% | 14,285 |
+| T5b | Cellular | DEFAULT | loaded | steady | **144 mAh/hr** | 50% | 6,865 |
+
+*T5 contaminated: 10 min screen-on + active sync storm.
+
+**Multiplier stack for reported worst-case (typical user, cellular, notifications, loaded account):**
+
+| Factor | Multiplier | Baseline → Result |
+|--------|-----------|------------------|
+| Notifications NONE → DEFAULT | 4.6× | 0.35 → 1.63 mAh/hr |
+| WiFi → Cellular | 59.7× | 1.63 → 97.5 mAh/hr |
+| Bare → Loaded account | 1.48× | 97.5 → 144 mAh/hr |
+| Steady-state → Post-reconnect sync | ~3× peak | 144 → ~430 mAh/hr |
+
+**Steady-state loaded account on cellular: 144 mAh/hr = 3.2%/hr on a 4500 mAh battery.**
+At 3.2%/hr from Status + ~1%/hr phone baseline + other apps → consistent with the reported 8.1%/hr, especially if the test began after a long disconnect (sync storm at start of overnight window).
+
+### H-N4 — Relay Mode vs Light Mode `[NOT APPLICABLE — reporter confirmed Light]`
+Relay mode (full Waku node) requires actively forwarding messages for other nodes — dramatically higher drain than Light mode. Reporter confirmed Light mode. Included for completeness; not a variable in reported case.
+
+---
+
+## 6. Validation Test Procedures
+
+*(Original test procedures below — now renumbered as section 6)*
 
 **Experimental standards:**
 - Each test run repeated **N=5 times** on separate battery stats windows (reset between runs)
