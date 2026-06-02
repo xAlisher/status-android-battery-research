@@ -33,12 +33,14 @@ Score each hypothesis based on code evidence:
 
 Cap at 95% (measurement required to reach certainty). Floor at 5%.
 
-**Example — keyboard timer (H1a):**
+**Example — keyboard timer (H1a) — simplified 3-term derivation:**
 - Timer starts unconditionally, no stop path: +40
 - No background guard found anywhere: +20 (architectural pattern)
 - Analogous issue confirmed in Qt Android (known): +15
 - No contradicting code: +0
 - **Prior: 75%** → round to 70% for conservatism
+
+*Note: The live H1a score in report.md uses a 4th term (+20 for explicit comment in source), arriving at 95% (capped to 90%). This example shows the method; see report.md §3 for the full derivation.*
 
 ### Step 2 — Update on measurement (Bayesian update)
 
@@ -85,14 +87,14 @@ Example ranking for Status #21045:
 
 | Hypothesis | Probability | Est. drain if true | Expected impact |
 |-----------|------------|-------------------|----------------|
-| H1a (keyboard timer) | 70% | 2%/hr | **1.4%/hr** |
-| H2 (Waku pings) | 65% | 3%/hr | **1.95%/hr** |
-| H1b (net callback) | 55% | 1%/hr | **0.55%/hr** |
+| H1a (keyboard timer) | 90% | 2%/hr | **1.8%/hr** |
+| H2 (Waku pings) | 45% | 3%/hr | **1.35%/hr** |
+| H1b (net callback) | 60% | 1%/hr | **0.60%/hr** |
 | H5 (wallet cascade) | 45% | 1%/hr | **0.45%/hr** |
 
-Fix order: H2 → H1a → H1b → H5 (by expected impact).
+Fix order: H1a → H2 → H1b → H5 (by expected impact).
 
-Note: H1a has a higher probability but H2 has higher drain if true — prioritise by expected impact, not raw probability alone.
+*Note: Values above reflect corrected Loop 2 scores from report.md §3. H2 was revised 65%→45% (wrong evidence category); H1a revised to 90% (4-term derivation). Fix order inverted from initial estimates — H1a is now top priority. See report.md for full scoring derivations.*
 
 ## Prior Probability Calibration Table
 

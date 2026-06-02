@@ -106,6 +106,35 @@ See `README.md` for the annotated file tree.
 
 ---
 
+### Loop 3 — Redundancy + Adversarial pass
+
+**Redundancy agent: 10 findings (R1–R10)**
+**Adversarial agent: 8 failures, 5 missing, 5 load-bearing (F1–F8, M1–M5, LB1–LB5)**
+
+**Supervisor decisions — executed:**
+
+| Item | Decision | Rationale |
+|------|----------|-----------|
+| R1 | Remove two-process code block from INDEX.md Quick Reference | Canonical in status-android-skills.md. INDEX prose heading already describes the two processes. Replaced with pointer. |
+| R4 | Remove tcpdump comment from INDEX.md Quick Reference | Duplicate of anti-patterns section and android-battery-measurement-toolkit.md. One-line inline comment adds noise. |
+| R7 | Remove ASCII lifecycle chain from journal.md (~11 lines) | Canonical in report.md §2. Source file table (load-bearing: line numbers for cross-reference) and pointer kept. |
+| F1 | Add note to bayesian skill file H1a worked example | Simplified 3-term derivation gives 70%; live report.md score is 90% (4 terms). Added note citing report.md §3 for full derivation. |
+| F2/R9 | Update bayesian skill file Step 4 expected-impact table | Stale pre-Loop-2 values (H2=65%→45%, H1b=55%→60%, H1a=70%→90%). Fix order was H2→H1a; now correctly H1a→H2. Wrong fix order in the skill file could cause a researcher to deprioritise the easiest, highest-impact fix. |
+| F3 | Fix H6 arithmetic in report.md | H6 said "model estimates ~6%/hr, gap ~2.1%/hr" but MH5 corrected midpoint to 4%/hr. H6 now states midpoint gap = 4.1%/hr with upper-bound gap = 2.1%/hr. Inconsistency was causing the residual to appear smaller than it is. |
+| F4 | Fix ghost file refs in report.md References section | `battery-research/` prefix → `research/`. File-not-found error for anyone following these links. |
+| F5 | Merge T1 split code blocks into single ```bash block | Wake lock capture command was in a second unlabelled block — would be silently skipped by copy-paste. Wake lock capture was added in Loop 1 as a critical fix; must not be skippable. |
+| F6 | Rename duplicate Phase 3 heading in research-protocol.md | Second "Phase 3" heading renamed to "Phase 3b". Phase numbering error causes sequencing confusion and could cause a researcher to skip the reproduce-issue section. Also fixed interface name in journal template (wlan0 → note to verify interface). |
+| F7 | Fix status-android-skills.md Waku snippet wlan0 → $IFACE | Waku monitoring for H2 requires mobile data interface. wlan0 shows 0 on cellular → false REJECTED for H2. Pattern mirrors the T2 fix from Loop 2. |
+| F8 | Fix android-controlled-battery-experiment.md run template wlan0 → ${IFACE:-wlan0} | Same as F7 — N=5 run template hardcoded WiFi interface. Any researcher using this for T2/T5 would silently record 0. |
+| M2 | Add node.login pre-check to report.md §5 | Without confirming connection before soak, T1/T4 CPU includes startup-overhead spikes producing false CONFIRMED results. Added as separate pre-test block before Qt process survival check. |
+| M3 | Add force-stop between N=5 runs in android-controlled-battery-experiment.md | Warm-started runs have different initial state (Waku subscriptions, Qt objects initialised). Mann-Whitney U assumes independent samples — non-independent runs violate this and can produce spurious p-values. |
+| M5 | Add T4 control condition definition to report.md | Control was only in a code comment ("vs control (app force-stopped)"), not in the verdict text. Without explicit control definition, Mann-Whitney U cannot be set up. Added "Control condition:" paragraph. |
+
+**Deferred to Trade-offs Log (not executed):**
+- R2: Claim-state table in research-protocol.md — protocol is designed as a standalone generic document usable without report.md. Inline table serves standalone usability. Keeping it is a deliberate design choice, not an oversight. Added as T5 below.
+
+---
+
 ## Removals Log
 
 *See Loop 1 and Loop 2 supervisor decisions above.*
@@ -138,3 +167,8 @@ See `README.md` for the annotated file tree.
 - Definition of done requires cross-check with mag and Sale's parallel investigation.
 - Neither person is identified in the repo beyond their GitHub usernames.
 - **Cannot be automated or resolved within this repo.** Action item for Alisher to complete manually before v1.0.
+
+**T5 — Claim-state table duplicated in research-protocol.md vs report.md** (Loop 3 R2)
+- `research/research-protocol.md` header block (lines 13–20) contains a copy of the claim-state table also in `research/report.md` (lines 14–19).
+- The protocol is explicitly designed as a standalone generic document — usable across any Android battery investigation without access to report.md. Removing the inline table would break standalone usability.
+- **Design decision: keep both.** If the tag definitions ever change, both files must be updated. This is a known maintenance cost accepted for portability.

@@ -77,14 +77,15 @@ for i in $(seq 1 10); do
         echo "Battery: $(adb shell dumpsys battery | grep level)"
         echo "CPU UI: $(adb shell top -b -n 1 | grep 'im.status.ethereum ')"
         echo "CPU SGo: $(adb shell top -b -n 1 | grep ':statusgo')"
-        echo "Net RX: $(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')"
+        echo "Net RX: $(adb shell cat /proc/net/dev | grep ${IFACE:-wlan0} | awk '{print $2}')"  # set IFACE=rmnet_data0 for cellular tests
     } >> /tmp/battery-test-run$RUN.log
 done
 
 echo "=== RUN $RUN END ===" >> /tmp/battery-test-run$RUN.log
 echo "Final battery: $(adb shell dumpsys battery | grep level)" >> /tmp/battery-test-run$RUN.log
 
-# Reset for next run
+# Reset for next run — also force-stop and cold-start the app for run independence
+adb shell am force-stop im.status.ethereum
 adb shell dumpsys battery reset
 ```
 

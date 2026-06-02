@@ -57,9 +57,12 @@ adb logcat -s StatusGoService -v time | grep -E "PauseServices|ResumeServices|er
 
 ### Watch Waku network activity (per-minute)
 ```bash
-NET1=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
+# First: identify the active interface (wlan0=WiFi, rmnet_data0=mobile data on Samsung)
+# adb shell cat /proc/net/dev | grep -v "lo:\|dummy\|sit\|p2p" | awk '{print $1, $2}'
+IFACE=wlan0  # change to rmnet_data0 for mobile data tests (H2/T2)
+NET1=$(adb shell cat /proc/net/dev | grep $IFACE | awk '{print $2}')
 sleep 60
-NET2=$(adb shell cat /proc/net/dev | grep wlan0 | awk '{print $2}')
+NET2=$(adb shell cat /proc/net/dev | grep $IFACE | awk '{print $2}')
 echo "RX bytes in 60s: $((NET2 - NET1))"
 ```
 

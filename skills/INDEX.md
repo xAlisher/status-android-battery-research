@@ -52,16 +52,13 @@ Escalation path when all hypotheses are rejected.
 
 ## Status-Specific ADB Quick Reference
 
-```bash
-# Two process check — ALWAYS measure both
-adb shell top -b -n 1 | grep "im.status.ethereum"
-# im.status.ethereum   ← Qt/Nim UI process
-# im.status.ethereum:statusgo ← libstatus.so / Waku foreground service
+*Two-process architecture, process names, and monitoring commands: `research/status-android-skills.md § Architecture Facts`.*
 
+```bash
 # Verify WakuV2 = Light before every test (Relay is expected to drain)
 # In app: Advanced Settings > WakuV2 options
 
-# Network bytes (tcpdump NOT available on stock Samsung)
+# Network bytes per interface
 adb shell cat /proc/net/dev | grep wlan0
 
 ```

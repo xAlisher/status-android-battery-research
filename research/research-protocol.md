@@ -151,12 +151,12 @@ Journal template:
 - CPU (UI process): X%
 - CPU (statusgo process): X%
 - Active wake locks: [list]
-- Network (wlan0 RX bytes): X
+- Network RX bytes (verify interface — wlan0 for WiFi, rmnet_data0 for mobile): X
 ```
 
 ---
 
-## Phase 3: Reproduce the Issue (Minimal)
+## Phase 3b: Reproduce the Issue (Minimal)
 
 **Goal:** Shortest possible reproduction that still shows the drain.
 

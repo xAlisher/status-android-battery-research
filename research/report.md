@@ -274,6 +274,13 @@ Backgrounded Status, 8 hours, mobile data, multiple accounts
 
 **Validity constraint — OS version gap:** The original 65% drain was reported on Android 15 (Samsung S21 Ultra). Tests run on Android 13 (S20 FE). Android 15 introduced stricter background process limits and battery bucket behaviour not present in Android 13. A finding confirmed on Android 13 is valid for that OS version but may understate the drain on Android 15 — or conversely, Android 13's less aggressive killing may allow Qt process survival where Android 15 would not. Record the test OS version with every verdict and flag any confirmation as "confirmed on Android 13."
 
+**Pre-test: Confirm node connected before any soak (run before T1–T5)**
+```bash
+# Confirm node.login fired — backgrounding before this produces startup-overhead CPU, not steady-state drain
+adb logcat -v time 2>/dev/null | grep -m1 "node.login" && echo "CONNECTED — proceed" || echo "WARNING: not connected — wait and retry"
+# If not seen within 60s: node failed to connect — stop and investigate
+```
+
 **Pre-test: Qt process survival check (run before T1)**
 ```bash
 # Background the app, wait 5 minutes, verify Qt process is still alive
@@ -320,7 +327,6 @@ for i in $(seq 1 10); do
     sleep 30
 done
 # Record median CPU% from 10 readings above
-```
 # Also capture wake locks held during the soak
 adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
 ```
@@ -379,7 +385,8 @@ adb shell dumpsys batterystats --charged | grep -A5 "im.status.ethereum\b"
 adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
 # Record: cpuTimeMs for UI process vs control (app force-stopped, same 10min window)
 ```
-**Expected:** If MH1 is dominant, UI process cpuTimeMs will be significantly higher than control. Run Mann-Whitney U against control set.
+**Control condition:** App force-stopped, same 10min window, same WiFi-off state. Run 5 control runs before or after treatment runs.
+**Expected:** If MH1 is dominant, UI process cpuTimeMs will be significantly higher than the force-stopped control (p < 0.05, Mann-Whitney U).
 
 ### T5 — Differential: WiFi vs Mobile Data
 Run T2 procedure twice in separate sessions — once on WiFi, once on mobile data (SIM data enabled, WiFi off). Record 5 runs each condition. If mobile data drain median > WiFi median by >2× → MH2 (radio never sleeps) CONFIRMED.
@@ -388,7 +395,7 @@ Run T2 procedure twice in separate sessions — once on WiFi, once on mobile dat
 
 ### Unexplained Drain Gap — H6 `[? — unknown]`
 
-**Observation:** Full drain model (MH5) estimates ~6%/hr. Observed: ~8.1%/hr. **Gap: ~2.1%/hr unaccounted.**
+**Observation:** Full drain model (MH5) at midpoints estimates ~4%/hr. Upper-bound assumptions push to ~6%/hr but require all components simultaneously at maximum. Observed: ~8.1%/hr. **Gap: ~4.1%/hr unaccounted at midpoints (~2.1%/hr at upper bounds).**
 
 Possible sources not yet hypothesised:
 - Screen-on events during overnight test (user rolled over, notification lit screen)
@@ -515,8 +522,8 @@ All raw data will be appended to `journal.md` under session results.
 - jrainville on background disabling: https://github.com/status-im/status-app/issues/21045#issuecomment-4555832986
 
 ### Research Files
-- Research protocol: `battery-research/research-protocol.md`
-- Raw journal: `battery-research/journal.md`
+- Research protocol: `research/research-protocol.md`
+- Raw journal: `research/journal.md`
 - Skills index: `skills/INDEX.md`
 
 ### Supporting Skills

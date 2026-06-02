@@ -39,18 +39,6 @@ Understand root cause of battery/CPU drain when Status runs in background (light
 
 ### Background Lifecycle Path (traced end-to-end)
 
-```
-Android puts app in background
-    → StatusQtActivity.onPause()
-        → StatusGoStub.setUiVisible(false)
-            → StatusGoServiceClient.setUiVisible(false)  [async, background thread]
-                → Binder IPC to separate :statusgo process
-                    → StatusGoService.applyUiVisibility(false)
-                        → scheduleBackendLifecycleUpdate(false)
-                            → nativeCall("PausableServices", "[]")  [get list]
-                            → nativeCall("PauseServices", [all_pausable_names])
-```
-
 **Source files:**
 - `StatusQtActivity.java:56-61` — onPause hook
 - `StatusGoStub.java:47-58` — bridge
