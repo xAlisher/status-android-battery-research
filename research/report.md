@@ -78,8 +78,8 @@ Activity.onPause()
 
 ## 3. Single-Factor Hypotheses
 
-### H1 — Qt Event Loop Not Paused `[H — 75%]`
-*Scoring: no stop path in code (+40), architectural pattern known in Qt Android (+15), explicit alexjba comment confirming assumption never validated (+20) = 75%*
+### H1 — Qt Event Loop Not Paused `[H — 65%]`
+*Scoring: no stop path in code (+40), architectural pattern known in Qt Android (+15), analogous known issue in Qt Android codebase (+10) = 65%. Note: alexjba's comment is in a GitHub issue, not source code — the bayesian scoring table awards +20 only for comments in source. Correct application of the framework gives 65%.*
 
 **Evidence:** Zero code pauses the Qt event loop on `Activity.onPause()`. Qt 6 on Android does not auto-suspend the event loop when the activity is paused. The loop runs until `onDestroy`. All QML `Timer {}` components, property bindings, and signal handlers continue firing.
 
@@ -267,8 +267,20 @@ Backgrounded Status, 8 hours, mobile data, multiple accounts
 - Each test run repeated **N=5 times** on separate battery stats windows (reset between runs)
 - Median value reported; outliers (>2× IQR) noted but not discarded without cause
 - Statistical comparison (control vs treatment): Mann-Whitney U test, p < 0.05 threshold
-- Energy unit: 1% battery ≈ 623J on Samsung Galaxy S20 FE (3800mAh × 4.4V × 3.6 / 100)
+- Energy unit: 1% battery ≈ 623J on Samsung Galaxy S20 FE (4500mAh × 3.85V × 3.6 / 100)
 - All tests require: device at 100% charge, WakuV2 = Light confirmed, other apps killed, `dumpsys battery unplug` applied, screen locked via power button (NOT home button)
+
+**Validity constraint — OS version gap:** The original 65% drain was reported on Android 15 (Samsung S21 Ultra). Tests run on Android 13 (S20 FE). Android 15 introduced stricter background process limits and battery bucket behaviour not present in Android 13. A finding confirmed on Android 13 is valid for that OS version but may understate the drain on Android 15 — or conversely, Android 13's less aggressive killing may allow Qt process survival where Android 15 would not. Record the test OS version with every verdict and flag any confirmation as "confirmed on Android 13."
+
+**Pre-test: Qt process survival check (run before T1)**
+```bash
+# Background the app, wait 5 minutes, verify Qt process is still alive
+adb shell input keyevent KEYCODE_POWER
+sleep 300
+adb shell ps -A | grep "im.status.ethereum " | grep -v ":statusgo"
+# If no output → Android killed the UI process → T1 will produce a false REJECTED verdict
+# Do NOT proceed with T1 if the UI process is dead — record "process killed at T+5min" and escalate
+```
 
 **Mann-Whitney U — calculation method:**
 ```python
@@ -302,10 +314,13 @@ for i in $(seq 1 10); do
 done
 # Record median CPU% from 10 readings above
 ```
+# Also capture wake locks held during the soak
+adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
+```
 **Verdict threshold:**
 - UI process > 2% sustained (median across 5 runs) → H1 + H1a CONFIRMED
 - UI process < 0.5% sustained → H1 REJECTED (Qt loop is pausing)
-- 0.5–2%: INCONCLUSIVE — extend to 15min soak, measure again
+- 0.5–2%: INCONCLUSIVE — extend to 15min soak. If still 0.5–2% after 15min: record exact median, note "ambiguous signal — Qt loop may be intermittently active." Add Perfetto trace (see `skills/android-battery-measurement-toolkit.md`) to get per-wakelock attribution before escalating.
 
 ### T2 — Validate H2 (Waku radio activity)
 ```bash
@@ -330,7 +345,9 @@ for i in 1 2 3; do
     adb shell svc wifi disable && sleep 5 && adb shell svc wifi enable && sleep 10
 done
 ```
-**Verdict:** Count `ConnectionChange` log lines during background. ≥ 1 per toggle → H1b CONFIRMED. Zero → H1b REJECTED or log tag changed.
+**Verdict:** Count `ConnectionChange` log lines during background. ≥ 1 per toggle → H1b mechanism CONFIRMED (callback fires in background). Zero → H1b REJECTED or log tag changed.
+
+**Important caveat (F6):** T3 confirms that the code path *executes* — it does not measure drain impact. A confirmed T3 means H1b is a real event source, but not how much battery it costs. Drain quantification requires T4 with WiFi cycling to compare battery% before/after with and without network toggles.
 
 ### T4 — Validate MH1 (compound: loop + keyboard timer)
 ```bash
@@ -342,6 +359,8 @@ adb shell dumpsys batterystats --reset
 sleep 600  # 10 min soak
 adb shell dumpsys cpuinfo | grep "im.status.ethereum "
 adb shell dumpsys batterystats --charged | grep -A5 "im.status.ethereum\b"
+# Also capture wake locks
+adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
 # Record: cpuTimeMs for UI process vs control (app force-stopped, same 10min window)
 ```
 **Expected:** If MH1 is dominant, UI process cpuTimeMs will be significantly higher than control. Run Mann-Whitney U against control set.
@@ -385,14 +404,9 @@ connect(qApp, &QGuiApplication::applicationStateChanged,
 **Impact:** Eliminates 20 JNI calls/sec in background. Zero functional regression — keyboard height is irrelevant when app is backgrounded.
 
 **R2 — Guard NetworkConnectivityCallback for background**
-`StatusGoService.java` — `dispatchConnectionChange()` should check `uiVisible` before dispatching, or add a separate background-aware flag. The `:statusgo` process has no Qt event loop state — it needs its own `uiVisible` check.
-```java
-private void dispatchConnectionChange(String type, boolean expensive) {
-    if (!uiVisible) return; // ← add this guard
-    // ... rest of dispatch
-}
-```
-*Note: Needs careful thought — if status-go genuinely needs network change events in background (e.g. Waku reconnect), this guard should be selective, not a blanket suppress.*
+`StatusGoService.java` — `dispatchConnectionChange()` fires unconditionally on every network capability change regardless of app visibility. The `:statusgo` process has no Qt event loop state — it needs its own `uiVisible` check.
+
+**Caution:** A blanket `if (!uiVisible) return` would break Waku reconnection after network interruptions, since Waku needs to know when the network comes back even in background. The fix must be selective — suppress cosmetic capability churn (e.g. signal strength changes that do not change type or metered status) but allow genuine network-up/network-down transitions through. Recommended approach: keep the existing de-duplication on `(type, expensive)` and add rate-limiting for background state rather than a hard suppress. File this as Medium-risk — requires validation that Waku reconnect still works after the change.
 
 **R3 — Validate Qt event loop suspension on Android**
 Explicitly test whether the Qt event loop suspends when the Android activity is paused. If it doesn't, add explicit suspension. alexjba's comment in the issue suggests this was assumed but never validated.[^4]
@@ -438,22 +452,7 @@ Add to RC checklist: 30-min background soak test with `dumpsys batterystats` bef
 | Any hypothesis rejected (unexpected) | Post to #21045: what was ruled out and why |
 | All hypotheses inconclusive after T1–T4 | Post escalation note: expanding scope |
 
-**Interim comment format for GitHub:**
-```
-## Interim Finding — [date]
-**Hypothesis confirmed:** [H number + description]
-**Evidence:** [exact measurement + command used]
-**Recommended fix:** [file:line, one-line description, risk level]
-**Research continuing:** [what's still being tested]
-```
-
-**Definition of done for this research:**
-1. T1–T5 all have `[CONFIRMED]` or `[REJECTED]` verdicts with numeric values
-2. All hypotheses updated from `[H]` to a measured state
-3. Recommendations reflect only confirmed findings
-4. Raw data appended to `journal.md`
-5. Findings cross-checked with mag and Sale's parallel work
-6. Report bumped to v1.0 and posted to #21045
+**Interim comment format and definition of done:** `skills/battery-research-interim-reporting.md`
 
 ---
 

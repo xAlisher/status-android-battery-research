@@ -268,16 +268,7 @@ adb pull /data/misc/perfetto-traces/trace.pb /tmp/status-trace.pb
 **When to use:** After T1–T5 if any result is INCONCLUSIVE — Perfetto identifies exact wakelock source. Note: Perfetto is available on Android 9+ (S20 FE = Android 13 ✓).
 
 ### Statistical comparison (Mann-Whitney U)
-```python
-# scipy must be available: pip install scipy
-from scipy.stats import mannwhitneyu
-# control = 5 measurements with app force-stopped
-# treatment = 5 measurements with app backgrounded
-stat, p = mannwhitneyu(control, treatment, alternative='less')
-# p < 0.05 → reject null (no difference) → hypothesis CONFIRMED
-# p ≥ 0.05 → INCONCLUSIVE
-```
-Full worked example in `skills/android-controlled-battery-experiment.md`.
+Full method and worked example: `skills/android-controlled-battery-experiment.md`.
 
 ---
 
@@ -404,27 +395,7 @@ How the totals are computed:
 
 **Full skill:** `skills/bayesian-hypothesis-scoring.md`
 
-When forming hypotheses, assign a numeric probability (0–100%) based on code evidence:
-
-| Evidence type | Points |
-|--------------|--------|
-| Direct code path confirmed (no runtime assumptions) | +40 |
-| Explicit comment in source confirming behaviour | +20 |
-| Analogous known issue in same codebase | +15 |
-| Architectural pattern known to cause this class of bug | +10 |
-| Contradicting code (e.g. guard exists but may not fire) | −20 |
-| No direct evidence, inference only | −10 |
-
-Cap at 95% (nothing is certain without measurement). Floor at 5%.
-
-Example — H1a (keyboard timer):
-- Direct code: timer starts unconditionally, no guard `+40`
-- No contradicting code `+0`
-- Known pattern (polling timer = battery drain) `+10`
-- Comment confirms it's Android-only `+20`
-- **Score: 70%** → "likely confirmed by measurement"
-
-Include score in hypothesis statement: `[H1a — 70%]`
+When forming hypotheses, assign a numeric probability (0–100%) based on code evidence. Full scoring table, Bayesian update rules, and expected-impact formula: `skills/bayesian-hypothesis-scoring.md`.
 
 ---
 
@@ -436,47 +407,7 @@ Include score in hypothesis statement: `[H1a — 70%]`
 
 **Do not wait for full T1–T5 suite.** If T1 confirms H1a (keyboard timer) in the first 10 minutes, release an interim report immediately. Developers can start a fix while T2–T5 continue.
 
-**Interim report format:**
-```
-## Interim Finding — [date] [H number]
-**Status:** CONFIRMED
-**Measurement:** [exact value] at T+[time]
-**Fix:** [specific file:line recommendation]
-**Risk:** [Low/Medium/High — why]
-**Does not block:** remaining tests T2–T5 continue in parallel
-```
-
-Post to GitHub issue as a comment. Tag jrainville and alexjba.
-
----
-
-## Definition of Done
-
-Research is complete when ALL of the following are true:
-
-1. T1–T5 all have verdicts (`[CONFIRMED]` or `[REJECTED]`) with numeric measurements
-2. Every hypothesis in the report has been updated from `[H]` to `[CONFIRMED]` or `[REJECTED]`
-3. At least one interim report was posted if any hypothesis was confirmed during testing
-4. Raw data (logcat excerpts, `top` output, battery stats) is appended to `journal.md`
-5. Recommendations section in `report.md` is updated to reflect confirmed findings only
-6. Findings compared with mag and Sale's parallel investigation — discrepancies noted
-7. Report version bumped to v1.0 and posted to the GitHub issue
-
----
-
-## Escalation Protocol
-
-**If all hypotheses are rejected:**
-1. Don't conclude the issue is a phantom. Something caused 65% drain.
-2. Re-examine assumption that WakuV2 was actually in Light mode (could be misconfigured)
-3. Check for unreported foreground usage (screen-on events during test)
-4. Expand scope: check `dumpsys batterystats` for wakelocks not attributed to Status — may be a system-level interaction
-5. File interim report: "hypotheses rejected, expanding scope" — so team knows state
-
-**If measurement is inconclusive:**
-1. Note exact values and why they're inconclusive
-2. Identify what better measurement would resolve it
-3. Do not promote to "confirmed" or "rejected" — keep as `[INCONCLUSIVE — reason]`
+Format, risk classification, definition of done, and escalation: `skills/battery-research-interim-reporting.md`. Post to GitHub issue as a comment. Tag jrainville and alexjba.
 
 ---
 
@@ -494,16 +425,6 @@ All measurements go directly into `journal.md` under the session they were colle
 ```
 
 Never summarise without including the raw output. The summary can be wrong; the raw output cannot.
-
----
-
-## Peer Review Step
-
-Before posting final report to GitHub:
-1. Share `report.md` with mag and Sale
-2. Ask specifically: "Does anything in your parallel investigation contradict these findings?"
-3. Note any discrepancies — do not resolve them unilaterally, surface them in the report
-4. Minimum 24h review window before marking report v1.0
 
 ---
 

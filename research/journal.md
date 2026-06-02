@@ -57,23 +57,7 @@ Android puts app in background
 - `StatusGoServiceClient.java:279-337` — async dispatch + Binder
 - `StatusGoService.java:194-214` — scheduleBackendLifecycleUpdate
 
-### Two Processes Running
-
-The architecture runs TWO Android processes when app is in background:
-1. **`:statusgo` process** — foreground service, holds `libstatus.so` (status-go runtime + Waku)
-2. **UI process** — Qt event loop, Nim runtime, QML engine
-
-Both are alive when the app is "backgrounded."
-
-### Critical Finding: Waku NOT Paused
-
-From `StatusGoService.java:188-191` (comment, emphasis mine):
-```
-Waku light client receive is event-driven and independent of all registered
-services — messages continue to arrive and be processed regardless of pause state.
-```
-
-**Implication:** `PauseServices` pauses everything *except* Waku. Waku runs at full throttle regardless. In light mode, Waku sends periodic keepalive/filter subscription pings to relay nodes. If these pings are too frequent, they wake the radio (WiFi/LTE) repeatedly → battery drain.
+*Two-process architecture and Waku pause exclusion: see `report.md § 2`.*
 
 ### alexjba's Qt Event Loop Hypothesis
 
@@ -129,17 +113,7 @@ Previously I noted messaging is "intentionally not paused." That's still true fo
 ## Extended Source Sweep — Additional Findings
 
 ### FINDING A: 50ms Keyboard Poll Timer (C++, Android-specific)
-`ui/StatusQ/src/systemutilsinternal.cpp:74-103` — `SystemUtilsInternal` starts a `QTimer` at **50ms interval (20 FPS)** unconditionally on Android:
-
-```cpp
-auto keyboardTimer = new QTimer(this);
-keyboardTimer->setInterval(50); // 20 FPS polling rate
-keyboardTimer->start();  // ← no condition, starts immediately, never stopped
-```
-
-Each tick makes **two JNI calls** into Java (`KeyboardUtil.getKeyboardHeight` + `KeyboardUtil.isKeyboardVisible`). JNI calls cross the JVM boundary → significant overhead per call. At 20/s, that's ~1,728,000 JNI calls over 24 hours. This timer is owned by `SystemUtilsInternal` which is a singleton — it runs for the entire app lifetime regardless of visibility.
-
-**Critically: if the Qt event loop is not paused in background (H1), this fires 20 times/second all night.**
+`ui/StatusQ/src/systemutilsinternal.cpp:74-103` — `SystemUtilsInternal` starts a `QTimer` at **50ms interval (20 FPS)** unconditionally on Android. Each tick makes two JNI calls (`KeyboardUtil.getKeyboardHeight` + `KeyboardUtil.isKeyboardVisible`). Timer is a singleton — no background guard, never stopped. → Promoted to `report.md H1a`. Code block: see `report.md H1a`.
 
 ### FINDING B: Duplicate Network Monitoring (Qt layer + Java layer)
 Two independent systems both monitor network changes and both push `ConnectionChange` to status-go:
@@ -192,20 +166,7 @@ This fires a delayed check 10 seconds after **any** app state change (foreground
 - Source: `ui/StatusQ/src/systemutilsinternal.cpp:74-103`
 - **Expected drain:** continuous low-level CPU burn in UI process
 
-### H1b: NetworkConnectivityCallback keeping :statusgo process awake [MEDIUM-HIGH confidence] — NEW
-- New in target build: `registerDefaultNetworkCallback` fires on every network capability change
-- Each change → `ConnectionChange` RPC → `hystrix.Flush()` in status-go
-- On cellular/mobile data (original reporter's test condition): capability changes are frequent
-- De-dup is only on `(type|expensive)` pair — doesn't fully suppress churn
-- The original reporter was on **mobile data** for 8 hours — highest-risk scenario for this callback
-- **Expected drain:** repeated status-go wakes, each triggering Go runtime activity
-
-### H5: wallet-tick-reload cascade → price API calls in background [MEDIUM confidence]
-- status-go emits `wallet-tick-reload` per chain-account pair when balances update
-- Each event → `rebuildMarketData()` + `buildAllTokens()` → `fetchPrices` RPC → external HTTP API call
-- If Waku delivers blocks/transactions in background, wallet service reacts and triggers price fetches
-- Users with multiple accounts/chains amplify the effect (N accounts × M chains = N×M events)
-- Source: `src/app_service/service/token/service_main.nim:156`, `async_tasks.nim:198`
+*H1b, H5: promoted to `report.md` — see §3 for full evidence and scoring.*
 
 ---
 
@@ -214,7 +175,7 @@ This fires a delayed check 10 seconds after **any** app state change (foreground
 ### MH1: Qt Event Loop + 50ms Keyboard Timer [VERY HIGH — most likely dominant cause]
 **Factors:** H1 (Qt loop not paused) × H1a (keyboard timer)
 **Chain:** App backgrounded → Qt event loop continues → 50ms timer fires → 2 JNI calls → Android runtime wakes → CPU active → repeat 20×/sec
-**Why it matters:** Even if Waku were perfectly silent, this alone produces continuous CPU activity in the UI process all night. 8 hours × 20 fires/sec × 2 JNI calls = **576,000 JNI round-trips.** JNI calls involve JVM thread attach/detach overhead.
+**Why it matters:** Even if Waku were perfectly silent, this alone produces continuous CPU activity in the UI process all night. Derivation: see `report.md H1a`.
 **Measurable signature:** UI process CPU > 2% sustained with screen locked, even with WiFi disabled.
 
 ### MH2: Waku Keepalives + Mobile Data Radio Never Sleeps [HIGH]
@@ -223,11 +184,7 @@ This fires a delayed check 10 seconds after **any** app state change (foreground
 **Why original reporter's test is worst-case:** 8 hours on **mobile data** (not WiFi). Mobile data radio has aggressive sleep modes — any wake prevents ~5s of sleep. Waku pings + connectivity churn = radio never reaches deep sleep state.
 **Measurable signature:** High `mobileActiveTime` in `dumpsys batterystats`; RX bytes/min > 50KB even with screen locked.
 
-### MH3: Two Network Monitors Fighting [MEDIUM]
-**Factors:** H1b (Java NetworkConnectivityCallback) + Finding B (Qt NetworkChecker 10s delayed check)
-**Chain:** Network state changes → Java callback fires `ConnectionChange` to status-go → Qt event loop also processes `applicationStateChanged` → schedules another network check 10s later → two independent systems both reacting to same physical event
-**Why it matters:** Double-processing is waste. Qt-side is guarded by `Qt::ApplicationActive` check so it's less harmful, but on the transition itself (background event fires the 10s timer which then checks and skips) the timer still runs on the Qt loop.
-**Measurable signature:** Logcat shows `ConnectionChange` arriving from two sources; correlates with network transitions.
+*MH3: promoted to `report.md § 4` (MH3). See there for full chain.*
 
 ### MH4: Wallet-tick Cascade + Waku Background Processing [MEDIUM]
 **Factors:** H2 (Waku active) + H5 (wallet-tick cascade) + multiple accounts
@@ -251,11 +208,7 @@ This fires a delayed check 10 seconds after **any** app state change (foreground
 - Waku radio activity: estimated ~2-3%/hour
 - Combined: plausibly explains the observed drain
 
-### H4: messaging service NOT paused (intentional) [CONFIRMED — by design]
-- StatusGoService.java:161: "Messaging ("messaging") is intentionally excluded so push notifications keep working."
-- This means the messaging service processes incoming messages in background
-- If community has high message volume, this could contribute to drain
-- **Lower priority** — this is expected behavior
+*H4: promoted to `report.md § 3` (H4). See there.*
 
 ---
 
@@ -313,9 +266,8 @@ adb shell cat /proc/net/dev
 
 ### Waku Ping Frequency Test
 ```bash
-# Monitor Waku network traffic (captures actual ping frequency)
-adb shell tcpdump -i any -c 100 2>/dev/null | grep -v localhost &
-# OR simpler:
+# NOTE: tcpdump is NOT available on stock Samsung Android — do not use it.
+# Use /proc/net/dev instead:
 adb shell cat /proc/net/dev  # snapshot 1
 sleep 60
 adb shell cat /proc/net/dev  # snapshot 2 (diff = bytes in 60s background)
