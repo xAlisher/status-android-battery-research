@@ -9,8 +9,8 @@
 ### Two Processes
 Status runs TWO Android processes when in background:
 ```
-im.status.ethereum          ← Qt/Nim UI process (QML engine, timers, animations)
-im.status.ethereum:statusgo ← Separate foreground service (libstatus.so, Waku, status-go)
+app.status.mobile          ← Qt/Nim UI process (QML engine, timers, animations)
+app.status.mobile:statusgo ← Separate foreground service (libstatus.so, Waku, status-go)
 ```
 Always measure **both** separately. Most devs only look at one.
 
@@ -38,13 +38,13 @@ Always measure **both** separately. Most devs only look at one.
 
 ### Identify both processes
 ```bash
-adb shell ps -A | grep -E "im.status|statusgo"
+adb shell ps -A | grep -E "app.status|statusgo"
 ```
 
 ### Monitor CPU per process in background
 ```bash
 # UI process (Qt event loop suspect)
-adb shell top -b -n 5 -d 10 | grep "im.status.ethereum "
+adb shell top -b -n 5 -d 10 | grep "app.status.mobile "
 
 # status-go process (Waku/status-go)
 adb shell top -b -n 5 -d 10 | grep ":statusgo"
@@ -68,7 +68,7 @@ echo "RX bytes in 60s: $((NET2 - NET1))"
 
 ### Battery stats per-app after soak
 ```bash
-adb shell dumpsys batterystats --charged | grep -A10 "im.status"
+adb shell dumpsys batterystats --charged | grep -A10 "app.status"
 ```
 
 ### Force unplug (required for all battery tests)
@@ -87,5 +87,5 @@ adb shell dumpsys battery reset  # restore when done
 - **Qt bottom bars** — adb tap + MCP Click both fail, user must tap manually
 - **Nav bar: y~2328** — never tap y > 2270 (system nav bar)
 - **WiFi ADB setup** — requires USB first: `adb tcpip 5555`, then disconnect USB
-- **Status app package:** `im.status.ethereum`
+- **Status app package:** `app.status.mobile`
 - **WakuV2 options** — in Advanced Settings. Must be **Light mode** for normal users (Relay mode will always drain battery — expected)

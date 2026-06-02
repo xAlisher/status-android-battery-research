@@ -60,8 +60,8 @@ Normal Android idle drain for a Samsung flagship: ~1–2%/hour. Observed: ~8%/ho
 Status Android runs **two separate OS processes** when backgrounded. This is critical — most battery analysis looks at only one.
 
 ```
-im.status.ethereum          ← Process 1: Qt 6 event loop + Nim runtime + QML
-im.status.ethereum:statusgo ← Process 2: Foreground service, libstatus.so, Waku light node
+app.status.mobile          ← Process 1: Qt 6 event loop + Nim runtime + QML
+app.status.mobile:statusgo ← Process 2: Foreground service, libstatus.so, Waku light node
 ```
 
 Background lifecycle flow:
@@ -97,7 +97,7 @@ Activity.onPause()
 
 **Source:** `mobile/android/qt6/src/app/status/mobile/StatusQtActivity.java:56-61` — `onPause` only calls `setUiVisible(false)`.
 
-**Expected drain signature:** UI process (`im.status.ethereum`) shows > 2% CPU sustained after 60s background with screen locked.
+**Expected drain signature:** UI process (`app.status.mobile`) shows > 2% CPU sustained after 60s background with screen locked.
 
 ---
 
@@ -263,12 +263,12 @@ Waku light node receives new blocks/transactions
 ```
 Backgrounded Status, 8 hours, mobile data, multiple accounts
 │
-├── UI Process (im.status.ethereum)
+├── UI Process (app.status.mobile)
 │   ├── Qt event loop running (H1)
 │   ├── keyboardTimer: 20 JNI calls/sec (H1a) ←── ~1-2% CPU/hr
 │   └── NetworkChecker 10s timer on state-change (benign, minor)
 │
-└── :statusgo Process (im.status.ethereum:statusgo)
+└── :statusgo Process (app.status.mobile:statusgo)
     ├── Waku light node pings: radio wakes every ~N min (H2) ←── ~2-3% battery/hr
     ├── NetworkConnectivityCallback: fires on each radio wake (H1b)
     ├── messaging service: processing incoming messages (H4)
@@ -303,7 +303,7 @@ adb logcat -v time 2>/dev/null | grep -m1 "node.login" && echo "CONNECTED — pr
 # Background the app, wait 5 minutes, verify Qt process is still alive
 adb shell input keyevent KEYCODE_POWER
 sleep 300
-adb shell ps -A | grep "im.status.ethereum " | grep -v ":statusgo"
+adb shell ps -A | grep "app.status.mobile " | grep -v ":statusgo"
 # If no output → Android killed the UI process → T1 will produce a false REJECTED verdict
 # Do NOT proceed with T1 if the UI process is dead — record "process killed at T+5min" and escalate
 ```
@@ -340,12 +340,12 @@ adb shell svc wifi disable
 # Monitor UI process CPU for 5 min
 for i in $(seq 1 10); do
     echo "=== T+$((i*30))s ===" && date
-    adb shell top -b -n 1 | grep "im.status.ethereum "
+    adb shell top -b -n 1 | grep "app.status.mobile "
     sleep 30
 done
 # Record median CPU% from 10 readings above
 # Also capture wake locks held during the soak
-adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
+adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "app.status"
 ```
 **Verdict threshold:**
 - UI process > 2% sustained (median across 5 runs) → H1 + H1a CONFIRMED
@@ -402,10 +402,10 @@ adb shell svc wifi disable
 adb shell input keyevent KEYCODE_POWER
 adb shell dumpsys batterystats --reset
 sleep 600  # 10 min soak
-adb shell dumpsys cpuinfo | grep "im.status.ethereum "
-adb shell dumpsys batterystats --charged | grep -A5 "im.status.ethereum\b"
+adb shell dumpsys cpuinfo | grep "app.status.mobile "
+adb shell dumpsys batterystats --charged | grep -A5 "app.status.mobile\b"
 # Also capture wake locks
-adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "im.status"
+adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | grep "app.status"
 # Record: cpuTimeMs for UI process vs control (app force-stopped, same 10min window)
 ```
 **Control condition:** App force-stopped, same 10min window, same WiFi-off state. Run 5 control runs before or after treatment runs.

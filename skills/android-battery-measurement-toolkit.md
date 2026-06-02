@@ -39,19 +39,19 @@ adb shell dumpsys batterystats --enable full-wake-history  # enable before test
 adb shell dumpsys batterystats --reset                     # reset before test
 # ... run test ...
 adb shell dumpsys batterystats --charged > /tmp/stats.txt  # capture after
-grep -E "im.status|wakelock|cpu|network" /tmp/stats.txt
+grep -E "app.status|wakelock|cpu|network" /tmp/stats.txt
 ```
 **Red flags:** wakelock > 1h/session, radio more frequent than every 30s, JobScheduler < 30s intervals
 
 ### 2. adb shell top — fastest, no setup
 ```bash
 # One snapshot
-adb shell top -b -n 1 | grep -E "im.status|statusgo"
+adb shell top -b -n 1 | grep -E "app.status|statusgo"
 
 # 5-min continuous sampling (every 30s)
 for i in $(seq 1 10); do
     echo "=== T+$((i*30))s ===" && date
-    adb shell top -b -n 1 | grep -E "im.status|statusgo"
+    adb shell top -b -n 1 | grep -E "app.status|statusgo"
     sleep 30
 done
 ```
@@ -106,7 +106,7 @@ adb shell dumpsys power | grep -A3 "Wake Locks:"
 ```
 
 ## Status-Specific Notes
-- App runs TWO processes: `im.status.ethereum` (Qt/UI) AND `im.status.ethereum:statusgo` (Waku/Go)
+- App runs TWO processes: `app.status.mobile` (Qt/UI) AND `app.status.mobile:statusgo` (Waku/Go)
 - Always measure both separately — they have independent CPU profiles
 - `tcpdump` NOT available on stock Samsung Android — use `/proc/net/dev` instead
 - Trepn Profiler: requires Qualcomm Snapdragon AND Qualcomm's app from Play Store. S20 FE uses Snapdragon 865 — hardware is compatible. **[? — unverified: app must be installed and device must not have Play Store blocked. Do not rely on Trepn until confirmed working on the test device. Fallback: Perfetto is sufficient and always available.]**

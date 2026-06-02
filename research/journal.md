@@ -217,7 +217,7 @@ adb shell dumpsys power | grep -E "Wake Locks|PARTIAL_WAKE_LOCK"
 ### Foreground Baseline (app open, idle)
 ```bash
 # Watch CPU for Status processes
-adb shell top -b -n 3 -d 2 | grep -E "im.status|statusgo"
+adb shell top -b -n 3 -d 2 | grep -E "app.status|statusgo"
 # Network activity
 adb shell cat /proc/net/dev | grep -v "lo:"
 # Battery stats reset
@@ -232,7 +232,7 @@ adb shell input keyevent KEYCODE_HOME
 # Sample CPU every 30 seconds for 5 minutes
 for i in $(seq 1 10); do
   echo "=== $(date) ==="
-  adb shell top -b -n 1 | grep -E "im.status|statusgo"
+  adb shell top -b -n 1 | grep -E "app.status|statusgo"
   sleep 30
 done
 
@@ -240,7 +240,7 @@ done
 adb shell dumpsys power | grep -A5 "PARTIAL_WAKE_LOCK"
 
 # Check battery stats
-adb shell dumpsys batterystats | grep -E "im.status|statusgo|wakelock|cpu"
+adb shell dumpsys batterystats | grep -E "app.status|statusgo|wakelock|cpu"
 
 # Network bytes after background period
 adb shell cat /proc/net/dev
@@ -260,7 +260,7 @@ adb shell cat /proc/net/dev  # snapshot 2 (diff = bytes in 60s background)
 # Check if Qt UI process CPU drops to ~0% in background
 # Expectation: if Qt loop is paused → UI process CPU ≈ 0%
 # If Qt loop is NOT paused → UI process CPU > 0% even in background
-adb shell top -b -n 1 | grep "im.status.ethereum$"  # UI process (no :statusgo suffix)
+adb shell top -b -n 1 | grep "app.status.mobile$"  # UI process (no :statusgo suffix)
 adb shell top -b -n 1 | grep ":statusgo"             # statusgo process
 ```
 

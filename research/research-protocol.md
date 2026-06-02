@@ -70,7 +70,7 @@ adb devices  # verify
 # 2. Install the specific build under test
 adb install -r <path-to-arm64.apk>
 # Verify correct version is installed:
-adb shell dumpsys package im.status.ethereum | grep versionName
+adb shell dumpsys package app.status.mobile | grep versionName
 
 # 3. Kill all other background apps — tests must isolate Status drain
 adb shell am kill-all   # kills cached background processes
@@ -102,7 +102,7 @@ adb shell ps -A | grep -E "status|statusgo"
 
 ```bash
 # Force-stop the app
-adb shell am force-stop im.status.ethereum
+adb shell am force-stop app.status.mobile
 
 # Lock screen (screen OFF = realistic background condition)
 adb shell input keyevent KEYCODE_POWER
@@ -129,7 +129,7 @@ adb shell dumpsys battery | grep -E "level|status|plugged|temperature"
 adb shell top -b -n 1 -H | head -30
 
 # App-specific CPU
-adb shell top -b -n 1 | grep -E "im.status|statusgo"
+adb shell top -b -n 1 | grep -E "app.status|statusgo"
 
 # Wake locks — what's keeping the CPU awake
 adb shell dumpsys power | grep -E -A2 "Wake Locks:|PARTIAL_WAKE_LOCK"
@@ -138,7 +138,7 @@ adb shell dumpsys power | grep -E -A2 "Wake Locks:|PARTIAL_WAKE_LOCK"
 adb shell cat /proc/net/dev
 
 # Memory
-adb shell dumpsys meminfo im.status.ethereum 2>/dev/null | head -30
+adb shell dumpsys meminfo app.status.mobile 2>/dev/null | head -30
 
 # Thermal
 adb shell dumpsys thermalservice 2>/dev/null | head -20
@@ -163,7 +163,7 @@ Journal template:
 For background battery drain:
 ```bash
 # 1. Open app, log in, let it connect
-adb shell monkey -p im.status.ethereum -c android.intent.category.LAUNCHER 1
+adb shell monkey -p app.status.mobile -c android.intent.category.LAUNCHER 1
 
 # 2. Wait for connection — confirm node.login before proceeding
 #    Testing a disconnected node is not representative of real usage
@@ -183,14 +183,14 @@ echo "Network baseline: $START_NET"
 for i in $(seq 1 20); do
     sleep 30
     echo "=== T+$((i*30))s ==="
-    adb shell top -b -n 1 | grep -E "im.status|statusgo"
+    adb shell top -b -n 1 | grep -E "app.status|statusgo"
 done
 
 # 5. Final measurements
 adb shell dumpsys battery | grep level
 adb shell dumpsys power | grep -A3 "Wake Locks:"
 adb shell cat /proc/net/dev | grep wlan0
-adb shell dumpsys batterystats --charged | grep -E "im.status|wakelock|cpu" | head -30
+adb shell dumpsys batterystats --charged | grep -E "app.status|wakelock|cpu" | head -30
 ```
 
 ---
@@ -200,7 +200,7 @@ adb shell dumpsys batterystats --charged | grep -E "im.status|wakelock|cpu" | he
 ### H-template: Qt event loop running in background
 ```bash
 # UI process CPU should drop to ~0% when backgrounded if event loop pauses
-adb shell top -b -n 1 | grep "im.status.ethereum "  # no suffix = UI process
+adb shell top -b -n 1 | grep "app.status.mobile "  # no suffix = UI process
 # Threshold: > 2% CPU sustained after 60s background → Qt loop NOT pausing → H CONFIRMED
 # Threshold: < 0.5% CPU → Qt loop is pausing → H REJECTED
 # 0.5–2% = INCONCLUSIVE, measure for longer
@@ -220,7 +220,7 @@ echo "RX bytes/min: $((NET2 - NET1))"
 # If CPU stays same → drain is local (Qt event loop, timers)
 adb shell svc wifi disable
 sleep 60
-adb shell top -b -n 1 | grep -E "im.status|statusgo"
+adb shell top -b -n 1 | grep -E "app.status|statusgo"
 adb shell svc wifi enable
 ```
 
@@ -233,7 +233,7 @@ adb shell dumpsys power | grep "PARTIAL_WAKE_LOCK" | wc -l
 
 ### H-template: Battery stats per-process
 ```bash
-adb shell dumpsys batterystats --charged | grep -A5 "im.status"
+adb shell dumpsys batterystats --charged | grep -A5 "app.status"
 # Look for: wakelockTime, cpuTimeMs, mobileRxBytes, mobileActiveTime
 ```
 
@@ -351,11 +351,11 @@ adb logcat -c                             # clear buffer
 
 # Process info
 adb shell ps -A | grep status            # list processes
-adb shell am force-stop im.status.ethereum  # force stop
+adb shell am force-stop app.status.mobile  # force stop
 
 # App control
 adb shell input keyevent KEYCODE_HOME     # background app
-adb shell monkey -p im.status.ethereum -c android.intent.category.LAUNCHER 1  # launch
+adb shell monkey -p app.status.mobile -c android.intent.category.LAUNCHER 1  # launch
 ```
 
 ---
@@ -418,10 +418,10 @@ All measurements go directly into `journal.md` under the session they were colle
 
 ```
 ### Raw Data — T1 — [timestamp]
-**Command:** `adb shell top -b -n 1 | grep "im.status.ethereum "`
+**Command:** `adb shell top -b -n 1 | grep "app.status.mobile "`
 **Output:**
   PID USER ... CPU% ... ARGS
-  1234 u0_a99 ... 8.2 ... im.status.ethereum
+  1234 u0_a99 ... 8.2 ... app.status.mobile
 **Verdict:** H1 CONFIRMED — 8.2% CPU sustained after 5min background with WiFi off
 ```
 
@@ -436,7 +436,7 @@ Never summarise without including the raw output. The summary can be wrong; the 
 - **Don't assume the fix is obvious.** Validate every hypothesis before concluding.
 - **Don't test while charging.** Always `dumpsys battery unplug` first.
 - **Don't use the same baseline twice.** Reset `batterystats` at the start of every test run.
-- **Don't ignore the two-process architecture.** Measure both `im.status.ethereum` AND `:statusgo` CPU separately.
+- **Don't ignore the two-process architecture.** Measure both `app.status.mobile` AND `:statusgo` CPU separately.
 - **Don't background with home button.** Use power button (screen lock). Screen-on affects power management.
 - **Don't skip the control test.** App force-stopped baseline is required to attribute drain to Status.
 - **Don't test in Relay mode.** Verify WakuV2 = Light before every test session.

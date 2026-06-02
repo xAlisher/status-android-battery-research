@@ -75,7 +75,7 @@ for i in $(seq 1 10); do
     {
         echo "--- T+${i}min ---"
         echo "Battery: $(adb shell dumpsys battery | grep level)"
-        echo "CPU UI: $(adb shell top -b -n 1 | grep 'im.status.ethereum ')"
+        echo "CPU UI: $(adb shell top -b -n 1 | grep 'app.status.mobile ')"
         echo "CPU SGo: $(adb shell top -b -n 1 | grep ':statusgo')"
         echo "Net RX: $(adb shell cat /proc/net/dev | grep ${IFACE:-wlan0} | awk '{print $2}')"  # set IFACE=rmnet_data0 for cellular tests
     } >> /tmp/battery-test-run$RUN.log
@@ -85,17 +85,17 @@ echo "=== RUN $RUN END ===" >> /tmp/battery-test-run$RUN.log
 echo "Final battery: $(adb shell dumpsys battery | grep level)" >> /tmp/battery-test-run$RUN.log
 
 # Reset for next run — also force-stop and cold-start the app for run independence
-adb shell am force-stop im.status.ethereum
+adb shell am force-stop app.status.mobile
 adb shell dumpsys battery reset
 ```
 
 ## Control Test (required baseline)
 
-Run the same script with `adb shell am force-stop im.status.ethereum` before starting. This gives the device-only idle drain rate. Without it, you cannot attribute drain to Status.
+Run the same script with `adb shell am force-stop app.status.mobile` before starting. This gives the device-only idle drain rate. Without it, you cannot attribute drain to Status.
 
 ```bash
-adb shell am force-stop im.status.ethereum
-adb shell am force-stop im.status.ethereum:statusgo 2>/dev/null
+adb shell am force-stop app.status.mobile
+adb shell am force-stop app.status.mobile:statusgo 2>/dev/null
 # Then run full measurement script
 ```
 
