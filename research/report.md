@@ -119,7 +119,13 @@ De-duplication only on `(type|expensive)` key pair. Fires unconditionally — no
 
 **Worst case:** Mobile data (original reporter's condition). LTE/5G networks have frequent capability changes (signal strength variations, handoffs) that may not change type but could in borderline conditions.
 
-**Source:** `mobile/android/qt6/src/app/status/mobile/ipc/StatusGoService.java` — `NetworkConnectivityCallback`, `dispatchConnectionChange()`
+**Source files (build 4cf3d8e4b):**
+- `StatusGoService.java:291-300` — `NetworkConnectivityCallback` class (`onCapabilitiesChanged`, `onLost`)
+- `StatusGoService.java:329-356` — `dispatchConnectionChange()` — de-dup on `lastConnectionKey` (line 333)
+- `StatusGoService.java:362-376` — `registerNetworkCallback()` → `registerDefaultNetworkCallback()` (line 371)
+- `StatusGoService.java:469` — registered unconditionally in `onCreate()`
+- `src/app_service/service/general/service.nim` — `when defined(android): return` — Qt/nim `connectionChange` is a **no-op on Android**; Java callback is the sole path
+- `ui/StatusQ/src/networkchecker.cpp:52-54` — Qt side still registers `applicationStateChanged` handler, but nim makes it a no-op; harmless on Android but dead code
 
 ---
 
@@ -210,16 +216,12 @@ Waku filter subscription ping → LTE radio wakes (Tx)
 
 Two independent systems both monitor network changes:
 
-| System | Location | Guards |
-|--------|----------|--------|
-| `NetworkConnectivityCallback` | `:statusgo` process (Java) | None — fires unconditionally |
-| `NetworkChecker` | UI process (C++) | Checks `Qt::ApplicationActive` |
+| System | Location | Guards | Android status |
+|--------|----------|--------|----------------|
+| `NetworkConnectivityCallback` | `:statusgo` process (Java, `StatusGoService.java:291`) | None — fires unconditionally (de-dup on type+expensive key) | **Active** |
+| `NetworkChecker` / nim `connectionChange` | UI process (C++/nim) | `Qt::ApplicationActive` check in `networkchecker.cpp:66` | **No-op** — `service.nim: when defined(android): return` |
 
-On backgrounding:
-1. Java callback fires on any connectivity change (no guard)
-2. Qt's `applicationStateChanged` schedules a 10s delayed reachability check (does check for active state, so mostly benign)
-
-**Net effect:** Every real network event → at minimum one `ConnectionChange` RPC from the Java side → status-go activity in background.
+**Net effect:** On Android the Java callback is the sole path. Every real network event → one `ConnectionChange` RPC (de-duped) → status-go activity in background.
 
 ---
 
@@ -360,6 +362,10 @@ echo "RX bytes in 5min background (mobile): $((NET2 - NET1))"
 
 ### T3 — Validate H1b (NetworkConnectivityCallback)
 ```bash
+# Verify Log.d is visible for this tag (may be suppressed on production builds)
+adb shell setprop log.tag.StatusGoService D
+# StatusGoService.java:338 logs: "ConnectionChange args: ..."
+
 # Single observation is sufficient for this test (binary: fires or doesn't)
 adb logcat -s StatusGoService -v time 2>/dev/null | grep "ConnectionChange" &
 # While monitoring, toggle WiFi 3 times with 10s gap
@@ -368,6 +374,8 @@ for i in 1 2 3; do
 done
 ```
 **Verdict:** Count `ConnectionChange` log lines during background. ≥ 1 per toggle → H1b mechanism CONFIRMED (callback fires in background). Zero → H1b REJECTED or log tag changed.
+
+**Note on Qt path:** `networkchecker.cpp:onReachabilityChanged` has a `Qt::ApplicationActive` guard, but this is irrelevant — `src/app_service/service/general/service.nim` makes the nim/Qt `connectionChange` a **no-op on Android** (`when defined(android): return`). Only the Java `NetworkConnectivityCallback` fires on this build.
 
 **Important caveat (F6):** T3 confirms that the code path *executes* — it does not measure drain impact. A confirmed T3 means H1b is a real event source, but not how much battery it costs. Drain quantification requires T4 with WiFi cycling to compare battery% before/after with and without network toggles.
 
