@@ -10,7 +10,7 @@ Raw captures live in `~/status-test-day/retro-log.md`; this file holds permanent
 - **Two processes:** `app.status.mobile` (Qt/Nim UI — frozen by Android in background) and `app.status.mobile:statusgo` (Waku/libstatus foreground service — always running).
 - **UI process is frozen** within ~30s of backgrounding on Android 13+ — H1 (Qt event loop) and H1a (keyboard timer) are moot on modern Android. Confirmed T1: 0.0% CPU all 20 samples.
 - **statusgo is the active process** in background. All meaningful background battery cost comes from here.
-- **PauseServices** excludes "messaging" explicitly — `isPaused()` is always false for the messaging service on Android. Use a separate `backgroundMode` flag.
+- **PauseServices/ResumeServices** work for Messenger once it is registered as a `PausableMessenger` in the `ServiceRegistry`. Register in `populateServiceRegistry()` by wrapping `wakuV2ExtSrvc.Messenger()`. The earlier note about needing a separate `backgroundMode` flag was wrong — Jo's #7516 uses `isPaused()` directly.
 
 ## Measurement Numbers (S20 FE, Android 13, WakuV2 Light)
 
@@ -42,35 +42,40 @@ Raw captures live in `~/status-test-day/retro-log.md`; this file holds permanent
 
 ## Fix Architecture (PRs)
 
-### R1 — Waku filter renewal suppression
-**go-waku** (`logos-messaging/logos-delivery-go#1304`): `Sub.backgroundMode atomic.Bool` + guards in `subscriptionLoop` ticker and closing cases + `SetBackgroundMode()` on `Sub` and `FilterManager`.
+### What landed in 2.38
 
-**status-go** (PR #7508 commit 2): Call chain —
-```
-Messenger.SetAppBackground(background)
-  → m.messaging.SetFilterBackgroundMode(background)      // pkg/messaging/api.go
-  → core.stack.Transport.SetFilterBackgroundMode(...)    // layers/transport/transport.go
-  → t.waku.SetFilterBackgroundMode(...)                  // types.Waku interface + gowaku.go
-  → w.filterManager.SetBackgroundMode(background)        // go-waku FilterManager
-```
+**Sale's #7507 (MERGED 2026-06-03):**
+- `fix(rpclimiter)`: pause per-chain 1s RPC limiter tickers in background (5 chains × 1 tick/s = 5 CPU wakeups/sec eliminated)
+- `chore(ens)`: pause ENS verifier ticker in background
 
-### R2 — Mailserver sync deferral
-**status-go** (PR #7508 commit 1):
-- `Messenger.backgroundMode atomic.Bool`
-- `SetAppBackground(bool)` — defers `asyncRequestAllHistoricMessages()` until foreground
-- Guards in `handleConnectionChange` and `checkForStorenodeCycleSignals`
-- RPC exposed via `services/ext/api.go`
+**Jo's #7516 / #21125 (in review):** Cleaner version of our R2 — mailserver sync deferral when backgrounded.
+- Removed `ToBackground()`/`ToForeground()` from `Messenger` entirely
+- Folded httpServer lifecycle + `asyncRequestAllHistoricMessages()` into `SetPaused()`
+- `PausableMessenger` delegates `Pause()`→`SetPaused(true)`, `Resume()`→`SetPaused(false)`
+- Guard in `handleConnectionChange`: `if online && !m.isPaused()` (uses existing `paused` atomic, no new field)
+- No go-waku dependency
 
-**status-app** (PR #21111): `StatusGoService.java` calls `nativeCall("SetAppBackground", "[" + !visible + "]")` in `scheduleBackendLifecycleUpdate`.
+### Deferred to 2.39 / Logos Delivery
 
-### R3 — WiFi-only sync toggle
-**status-app** (PR #21110): Remove `visible: false` from `allowSyncingOnMobileNetwork` list item in `MessagingView.qml`. The Nim backend setting `getSyncingOnMobileNetwork` already works; only the UI hide was missing.
+**R1 — Waku filter health-check ping suppression** (go-waku #1304):
+- `FilterHealthCheckLoop` pings every ~1 min → keeps LTE radio active at 55% duty cycle
+- Fix: `backgroundMode atomic.Bool` in `WakuFilterLightNode`, gate in `FilterHealthCheckLoop`
+- Dropped from 2.38 — regression risk (silent subscription expiry) + go-waku → Logos Delivery migration in 2.39
 
-## Expected Post-Fix Numbers
+**R3 — WiFi-only sync toggle** (status-app #21110):
+- Backend `getSyncingOnMobileNetwork` was rolled back in #20469; UI toggle pointless without it
 
-- **R1 alone:** LTE duty cycle from 55% → near 0% after Doze engages. Drain: 97.5 mAh/hr → ~1.6 mAh/hr (WiFi baseline). ~60× improvement for cellular users.
-- **R1+R2:** Loaded account steady-state from 144 mAh/hr → ~1–2 mAh/hr. Sync storm eliminated. ~70–100× combined improvement.
-- **Tradeoff:** 1–2s subscription staleness on foreground return. Push notifications unaffected.
+## Measured Post-Fix Numbers
+
+| Scenario | Modem duty cycle | Drain |
+|---|---|---|
+| T4 baseline (cellular, bare) | 55% | 97.5 mAh/hr |
+| T5b baseline (cellular, loaded) | ~50% | 144 mAh/hr |
+| T5b with R1b+R2+R3 (weak signal -120 dBm) | **15.8%** | ~40 mAh/hr est |
+| T5b with R1b only (previous session) | **5.6%** | ~14 mAh/hr est |
+
+- 15.8% vs 5.6% gap: R1b (FilterHealthCheckLoop suppression) accounts for most of the difference. Without it, ~15% is the floor for 2.38.
+- WiFi drain (T3): 1.6 mAh/hr — unaffected.
 
 ## Go status-go Patterns
 

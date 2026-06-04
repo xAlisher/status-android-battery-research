@@ -20,6 +20,8 @@ All files follow the fieldcraft atomic recipe schema (YAML frontmatter + Problem
 | `battery-research-interim-reporting.md` | Triggering and formatting interim GitHub reports mid-research |
 | `go-mod-replace-sum-tidy.md` | Cleaning orphaned go.sum entries after adding a replace directive |
 | `companion-pr-timing-race.md` | Avoiding sha_mismatch in status-go companion PR Check workflow |
+| `status-go-pausable-service-registration.md` | Registering a new service in status-go ServiceRegistry so PauseServices/ResumeServices cover it |
+| `android-apk-docker-build.md` | Building Status Android APK locally via Docker (5 ContainerBuilds.mk fixes) |
 
 ## File Descriptions
 
@@ -56,6 +58,18 @@ completion; CI golangci-lint catches it via its own tidy diff.
 The status-go `Check` workflow fires within ~15s of a push. If the companion status-app PR's
 `vendor/status-go` submodule hasn't been updated yet, the SHA won't match. Pattern: update
 companion BEFORE pushing status-go, or `gh run rerun --failed` immediately after.
+
+### `status-go-pausable-service-registration.md`
+How to wrap a service as `PausableMessenger` and register it in `populateServiceRegistry()` so
+the Java `PauseServices`/`ResumeServices` call automatically gates its background behaviour.
+Covers: wrapper struct, `PausableName()`, `Pause()`/`Resume()` delegation, import, registration site.
+- Source: status-go PR #7516 (jrainville), retro session 7
+
+### `android-apk-docker-build.md`
+5-fix recipe for building the Status Android APK locally via Docker (`ContainerBuilds.mk`):
+root permissions, git safe.directory, cache volume paths (HOME-aware), version.sh shallow-clone
+tag, and explicit mobileui-android Maven publish step before Gradle.
+- Source: retro session 7
 
 ### `battery-research-interim-reporting.md`
 Trigger conditions for posting interim findings before research completes. GitHub comment template
